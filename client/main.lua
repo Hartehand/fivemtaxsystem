@@ -1,6 +1,8 @@
 local resourceName = GetCurrentResourceName()
 local isOpen = false
 local spawnedNpc
+local uiReady = false
+local openRequested = false
 
 local function notify(message, msgType)
     lib.notify({ title = 'DOJ Finance Suite', description = message, type = msgType or 'inform' })
@@ -8,15 +10,37 @@ end
 
 local function openTablet()
     if isOpen then return end
-    isOpen = true
+    openRequested = true
     SetNuiFocus(true, true)
     SetNuiFocusKeepInput(false)
-    SendNUIMessage({ action = 'open' })
+
+    if uiReady then
+        isOpen = true
+        SendNUIMessage({ action = 'open' })
+    else
+        CreateThread(function()
+            local tries = 0
+            while openRequested and not uiReady and tries < 40 do
+                tries = tries + 1
+                Wait(100)
+            end
+
+            if openRequested and uiReady then
+                isOpen = true
+                SendNUIMessage({ action = 'open' })
+            elseif openRequested then
+                SetNuiFocus(false, false)
+                openRequested = false
+                notify('Tablet UI konnte nicht geladen werden (NUI nicht bereit).', 'error')
+            end
+        end)
+    end
 end
 
 local function closeTablet()
-    if not isOpen then return end
+    if not isOpen and not openRequested then return end
     isOpen = false
+    openRequested = false
     SetNuiFocus(false, false)
     SendNUIMessage({ action = 'close' })
 end
@@ -27,6 +51,15 @@ end)
 
 RegisterNUICallback('close', function(_, cb)
     closeTablet()
+    cb({ ok = true })
+end)
+
+RegisterNUICallback('uiReady', function(_, cb)
+    uiReady = true
+    if openRequested and not isOpen then
+        isOpen = true
+        SendNUIMessage({ action = 'open' })
+    end
     cb({ ok = true })
 end)
 

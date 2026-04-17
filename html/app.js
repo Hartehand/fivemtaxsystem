@@ -200,3 +200,7 @@ window.addEventListener('message', function(event) {
     app.classList.add('hidden');
   }
 });
+
+window.addEventListener('load', function() {
+  post('uiReady', {}).catch(function() {});
+});
