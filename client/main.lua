@@ -103,6 +103,16 @@ RegisterNUICallback('getBusinessCases', function(payload, cb)
     cb(response or { rows = {}, count = 0 })
 end)
 
+RegisterNUICallback('getBusinesses', function(payload, cb)
+    local response = lib.callback.await('doj_finance_suite:server:getBusinesses', false, payload and payload.page or 1, payload and payload.pageSize or 50)
+    cb(response or { rows = {}, count = 0 })
+end)
+
+RegisterNUICallback('getBusinessProfile', function(payload, cb)
+    local response = lib.callback.await('doj_finance_suite:server:getBusinessProfile', false, payload and payload.business_id or '')
+    cb(response or {})
+end)
+
 RegisterNUICallback('getTransactions', function(payload, cb)
     local response = lib.callback.await('doj_finance_suite:server:getTransactions', false, payload and payload.filters or {}, payload and payload.page or 1, payload and payload.pageSize or 50)
     cb(response or { rows = {}, count = 0, analysis = { score = 0, band = 'unauffaellig', reasons = {} }, windows = {} })

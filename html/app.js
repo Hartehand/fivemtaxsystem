@@ -5,6 +5,7 @@ var closeBtn = document.getElementById('closeBtn');
 var state = { tab: 'dashboard' };
 
 function safe(v, d) { return (v === undefined || v === null) ? d : v; }
+function money(v) { return '$' + Number(safe(v, 0)).toFixed(2); }
 
 function post(action, data) {
   return fetch('https://' + GetParentResourceName() + '/' + action, {
@@ -25,25 +26,19 @@ function badge(band) {
 function setTab(tab) {
   state.tab = tab;
   tabs.forEach(function(t) { t.classList.toggle('active', t.dataset.tab === tab); });
-  try {
-    render();
-  } catch (e) {
-    console.error('[doj_finance_suite][nui] render error', e);
-  }
+  render();
 }
 
 function renderDashboard() {
   post('getDashboard', {}).then(function(data) {
     var risk = (data.private && data.private.risk) || { score: 0, band: 'unauffaellig', reasons: [] };
     var high = data.highRiskCases || [];
+
     var rows = high.map(function(r) {
-      var meta = r.meta || {};
-      var rr = r.risk || {};
-      return '<tr><td>' + (r.job_label || r.job || '-') + '</td><td>' + safe(rr.score, 0) + '</td><td>' + badge(rr.band) + '</td><td>$' + Number(safe(meta.restDebt, 0)).toFixed(2) + '</td><td>' + (rr.reasons || []).join(', ') + '</td></tr>';
+      return '<tr><td>' + (r.job_label || r.job || '-') + '</td><td>' + safe(r.risk && r.risk.score, 0) + '</td><td>' + badge(r.risk && r.risk.band) + '</td><td>' + money(r.meta && r.meta.restDebt) + '</td><td>' + ((r.risk && r.risk.reasons) ? r.risk.reasons.join(', ') : '-') + '</td></tr>';
     }).join('');
 
-    content.innerHTML = '' +
-      '<div class="grid">' +
+    content.innerHTML = '<div class="grid">' +
       '<div class="card"><h3>Privatrisiko</h3><div class="val">' + safe(risk.score, 0) + '</div>' + badge(risk.band) + '</div>' +
       '<div class="card"><h3>Business Hochrisiko</h3><div class="val">' + safe(data.business && data.business.highRiskCount, 0) + '</div></div>' +
       '<div class="card"><h3>Häufige Schuldner</h3><div class="val">' + safe(data.business && data.business.debtorCount, 0) + '</div></div>' +
@@ -54,12 +49,11 @@ function renderDashboard() {
   });
 }
 
-function bindDetailButtons() {
+function bindCaseDetailButtons() {
   var buttons = document.querySelectorAll('[data-detail]');
   buttons.forEach(function(btn) {
     btn.addEventListener('click', function() {
-      var raw = btn.getAttribute('data-detail');
-      var payload = JSON.parse(decodeURIComponent(raw));
+      var payload = JSON.parse(decodeURIComponent(btn.getAttribute('data-detail')));
       post('getCaseDetail', payload).then(function(detail) {
         var bundle = detail.bundle || {};
         var lines = [];
@@ -70,6 +64,7 @@ function bindDetailButtons() {
         (bundle.notes || []).slice(0, 8).forEach(function(n) { lines.push((n.author_identifier || '-') + ': ' + (n.note || '-')); });
         lines.push('--- Audit ---');
         (bundle.audit || []).slice(0, 8).forEach(function(a) { lines.push((a.created_at || '-') + ': ' + (a.action || '-')); });
+
         var panel = document.getElementById('detail');
         if (panel) panel.textContent = lines.join('\n');
       });
@@ -81,11 +76,11 @@ function renderPrivate() {
   post('getPrivateCases', { page: 1, pageSize: 50, filters: {} }).then(function(data) {
     var rows = (data.rows || []).map(function(r) {
       var payload = encodeURIComponent(JSON.stringify({ source_type: 'taxes', source_id: r.id }));
-      return '<tr><td>' + r.id + '</td><td>' + (r.receiver_name || r.receiver || '-') + '</td><td>' + (r.status || '-') + '</td><td>$' + Number(safe(r.amount,0)).toFixed(2) + '</td><td>' + (r.due_date || '-') + '</td><td><button data-detail="' + payload + '">Akte</button></td></tr>';
+      return '<tr><td>' + r.id + '</td><td>' + (r.receiver_name || r.receiver || '-') + '</td><td>' + (r.status || '-') + '</td><td>' + money(r.amount) + '</td><td>' + (r.due_date || '-') + '</td><td><button data-detail="' + payload + '">Akte</button></td></tr>';
     }).join('');
 
     content.innerHTML = '<div class="small">Gesamt: ' + safe(data.count, 0) + '</div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Betrag</th><th>Due</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="detail" class="detail-panel small">Wähle einen Fall.</div>';
-    bindDetailButtons();
+    bindCaseDetailButtons();
   });
 }
 
@@ -93,46 +88,163 @@ function renderBusiness() {
   post('getBusinessCases', { page: 1, pageSize: 50, filters: {} }).then(function(data) {
     var rows = (data.rows || []).map(function(r) {
       var payload = encodeURIComponent(JSON.stringify({ source_type: 'taxes_business', source_key: (r.job || '') + '|' + (r.period || '') }));
-      return '<tr><td>' + (r.job_label || r.job || '-') + '</td><td>' + (r.period || '-') + '</td><td>' + (r.business_id || '-') + '</td><td>' + (r.status || '-') + '</td><td>$' + Number(safe(r.restschuld,0)).toFixed(2) + '</td><td><button data-detail="' + payload + '">Akte</button></td></tr>';
+      return '<tr><td>' + (r.job_label || r.job || '-') + '</td><td>' + (r.period || '-') + '</td><td>' + (r.business_id || '-') + '</td><td>' + (r.status || '-') + '</td><td>' + money(r.restschuld) + '</td><td><button data-detail="' + payload + '">Akte</button></td></tr>';
     }).join('');
 
     content.innerHTML = '<div class="small">Gesamt: ' + safe(data.count, 0) + '</div><div class="table-wrap"><table><thead><tr><th>Job</th><th>Periode</th><th>Firma</th><th>Status</th><th>Restschuld</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="detail" class="detail-panel small">Wähle einen Fall.</div>';
-    bindDetailButtons();
+    bindCaseDetailButtons();
   });
 }
 
 function renderTransactions() {
-  post('getTransactions', { page: 1, pageSize: 80, filters: {} }).then(function(data) {
-    var analysis = data.analysis || { score: 0, band: 'unauffaellig', reasons: [] };
-    var w = data.windows || {};
-    var w7 = w[7] || { incoming: 0, outgoing: 0 };
-    var rows = (data.rows || []).map(function(tx) {
-      return '<tr><td>' + tx.id + '</td><td>' + (tx.type || '-') + '</td><td>$' + Number(safe(tx.value,0)).toFixed(2) + '</td><td>' + (tx.sender_name || '-') + '</td><td>' + (tx.receiver_name || '-') + '</td><td>' + (tx.date || '-') + '</td></tr>';
+  content.innerHTML = '<div class="input-row"><input id="txSearch" placeholder="Suche Name/Identifier" /><input id="txFrom" placeholder="Von (YYYY-MM-DD)" /><input id="txTo" placeholder="Bis (YYYY-MM-DD)" /><select id="txType"><option value="">Alle Typen</option><option value="deposit">deposit</option><option value="withdraw">withdraw</option><option value="transfer">transfer</option></select><button id="applyTxFilter">Filter anwenden</button></div><div id="txResult"></div>';
+
+  function loadTransactions() {
+    var filters = {
+      search: (document.getElementById('txSearch') || {}).value || '',
+      from: (document.getElementById('txFrom') || {}).value || '',
+      to: (document.getElementById('txTo') || {}).value || ''
+    };
+
+    post('getTransactions', { page: 1, pageSize: 120, filters: filters }).then(function(data) {
+      var selectedType = ((document.getElementById('txType') || {}).value || '').toLowerCase();
+      var rows = (data.rows || []).filter(function(tx) {
+        if (!selectedType) return true;
+        return ((tx.type || '').toLowerCase() === selectedType);
+      });
+
+      var analysis = data.analysis || { score: 0, band: 'unauffaellig', reasons: [] };
+      var w = data.windows || {};
+      var w7 = w[7] || { incoming: 0, outgoing: 0 };
+      var txRows = rows.map(function(tx) {
+        return '<tr><td>' + tx.id + '</td><td>' + (tx.type || '-') + '</td><td>' + money(tx.value) + '</td><td>' + (tx.sender_name || '-') + '</td><td>' + (tx.receiver_name || '-') + '</td><td>' + (tx.date || '-') + '</td></tr>';
+      }).join('');
+
+      var result = document.getElementById('txResult');
+      if (!result) return;
+      result.innerHTML = '<div class="grid"><div class="card"><h3>Analyse Score</h3><div class="val">' + safe(analysis.score, 0) + '</div>' + badge(analysis.band) + '</div><div class="card"><h3>7T Eingänge</h3><div class="val">' + money(w7.incoming) + '</div></div><div class="card"><h3>7T Ausgänge</h3><div class="val">' + money(w7.outgoing) + '</div></div><div class="card"><h3>Gefilterte TX</h3><div class="val">' + rows.length + '</div></div></div><div class="detail-panel">' + ((analysis.reasons || []).join('\n') || 'Keine Auffälligkeit erkannt') + '</div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Betrag</th><th>Sender</th><th>Empfänger</th><th>Datum</th></tr></thead><tbody>' + txRows + '</tbody></table></div>';
+    });
+  }
+
+  var btn = document.getElementById('applyTxFilter');
+  if (btn) btn.addEventListener('click', loadTransactions);
+  loadTransactions();
+}
+
+function renderCompanies() {
+  post('getBusinesses', { page: 1, pageSize: 100 }).then(function(data) {
+    var rows = (data.rows || []).map(function(b) {
+      var p = b.data || {};
+      var payload = encodeURIComponent(JSON.stringify({ business_id: b.id }));
+      return '<tr><td>' + (b.id || '-') + '</td><td>' + (b.type || '-') + '</td><td>' + (b.owner || '-') + '</td><td>' + money(p.balance) + '</td><td>' + money(p.totalEarned) + '</td><td>' + safe(p.totalOrders, 0) + '</td><td>' + safe(p.totalSales, 0) + '</td><td><button data-company="' + payload + '">Details</button></td></tr>';
     }).join('');
 
-    content.innerHTML = '<div class="grid"><div class="card"><h3>Analyse Score</h3><div class="val">' + safe(analysis.score,0) + '</div>' + badge(analysis.band) + '</div><div class="card"><h3>Offene Steuerlast</h3><div class="val">$' + Number(safe(data.openDebt,0)).toFixed(2) + '</div></div><div class="card"><h3>7T Eingänge</h3><div class="val">$' + Number(safe(w7.incoming,0)).toFixed(2) + '</div></div><div class="card"><h3>7T Ausgänge</h3><div class="val">$' + Number(safe(w7.outgoing,0)).toFixed(2) + '</div></div></div><div class="detail-panel">' + ((analysis.reasons || []).join('\n') || 'Keine Auffälligkeit erkannt') + '</div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Betrag</th><th>Sender</th><th>Empfänger</th><th>Datum</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    content.innerHTML = '<div class="small">Unternehmen gesamt: ' + safe(data.count, 0) + '</div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Owner</th><th>Balance</th><th>TotalEarned</th><th>Orders</th><th>Sales</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="companyDetail" class="detail-panel small">Wähle ein Unternehmen für Detailansicht.</div>';
+
+    var buttons = document.querySelectorAll('[data-company]');
+    buttons.forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var payload = JSON.parse(decodeURIComponent(btn.getAttribute('data-company')));
+        post('getBusinessProfile', payload).then(function(detail) {
+          var panel = document.getElementById('companyDetail');
+          if (!panel) return;
+
+          if (!detail || !detail.business) {
+            panel.textContent = 'Keine Profildaten verfügbar.';
+            return;
+          }
+
+          var lines = [];
+          lines.push('Unternehmen: ' + (detail.business.id || '-'));
+          lines.push('Owner: ' + (detail.business.owner || '-'));
+          lines.push('Risk Score: ' + safe(detail.risk && detail.risk.score, 0) + ' (' + safe(detail.risk && detail.risk.band, 'unauffaellig') + ')');
+          lines.push('Risk Gründe: ' + ((detail.risk && detail.risk.reasons) ? detail.risk.reasons.join(', ') : '-'));
+          lines.push('--- Letzte relevante Transaktionen ---');
+          (detail.transactions || []).slice(0, 8).forEach(function(tx) {
+            lines.push('#' + tx.id + ' | ' + (tx.type || '-') + ' | ' + money(tx.value) + ' | ' + (tx.date || '-'));
+          });
+
+          panel.innerHTML = lines.join('<br/>') + '<div class="input-row" style="margin-top:10px;"><button id="startReview">Prüfverfahren starten</button><input id="companyNote" placeholder="Notiztext" /><button id="saveCompanyNote">Notiz speichern</button></div>';
+
+          var businessId = detail.business.id;
+          var startBtn = document.getElementById('startReview');
+          if (startBtn) {
+            startBtn.addEventListener('click', function() {
+              post('setStatus', {
+                source_type: 'vms_business',
+                source_id: businessId,
+                source_key: null,
+                status: 'in_pruefung',
+                assigned_to: 'nui_operator'
+              });
+            });
+          }
+
+          var noteBtn = document.getElementById('saveCompanyNote');
+          if (noteBtn) {
+            noteBtn.addEventListener('click', function() {
+              var text = (document.getElementById('companyNote') || {}).value || '';
+              if (!text) return;
+              post('addNote', {
+                source_type: 'vms_business',
+                source_id: businessId,
+                source_key: null,
+                note: text,
+                is_internal: true
+              });
+            });
+          }
+        });
+      });
+    });
   });
 }
 
 function renderReports() {
   post('listReports', { filters: { page: 1, pageSize: 50 } }).then(function(list) {
     var rows = (list.rows || []).map(function(r) {
-      return '<tr><td>' + r.id + '</td><td>' + r.report_type + '</td><td>' + r.title + '</td><td>' + r.created_by + '</td><td>' + r.created_at + '</td></tr>';
+      return '<tr><td>' + r.id + '</td><td>' + r.report_type + '</td><td>' + r.title + '</td><td>' + r.created_by + '</td><td>' + r.created_at + '</td><td><button data-report="' + r.id + '">Ansehen</button></td></tr>';
     }).join('');
 
-    content.innerHTML = '<div class="input-row"><select id="reportType"><option value="schuldnerreport">schuldnerreport</option><option value="hochrisikoreport">hochrisikoreport</option><option value="transaktionsauffaelligkeit">transaktionsauffaelligkeit</option><option value="zahlungsverhalten">zahlungsverhalten</option></select><button id="createReport">Report erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Titel</th><th>Ersteller</th><th>Datum</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    content.innerHTML = '<div class="input-row"><select id="reportType"><option value="schuldnerreport">schuldnerreport</option><option value="hochrisikoreport">hochrisikoreport</option><option value="transaktionsauffaelligkeit">transaktionsauffaelligkeit</option><option value="zahlungsverhalten">zahlungsverhalten</option></select><button id="createReport">Report erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Titel</th><th>Ersteller</th><th>Datum</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="reportDetail" class="detail-panel small">Wähle einen Report zum Anzeigen.</div>';
 
     var createBtn = document.getElementById('createReport');
     if (createBtn) {
       createBtn.addEventListener('click', function() {
-        var select = document.getElementById('reportType');
-        var reportType = select ? select.value : 'schuldnerreport';
+        var reportType = (document.getElementById('reportType') || {}).value || 'schuldnerreport';
+        var panel = document.getElementById('reportDetail');
+        if (panel) panel.textContent = 'Report wird erstellt...';
+
         post('createReport', { report_type: reportType, payload: {} }).then(function(created) {
-          alert(created && created.id ? ('Report erstellt: ' + created.id) : 'Report fehlgeschlagen');
+          if (panel) panel.textContent = created && created.id ? ('Report erstellt: ' + created.id) : 'Report fehlgeschlagen';
           renderReports();
         });
       });
     }
+
+    var reportButtons = document.querySelectorAll('[data-report]');
+    reportButtons.forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var reportId = Number(btn.getAttribute('data-report'));
+        post('getReport', { report_id: reportId }).then(function(detail) {
+          var panel = document.getElementById('reportDetail');
+          if (!panel) return;
+          if (!detail || !detail.report) {
+            panel.textContent = 'Report konnte nicht geladen werden.';
+            return;
+          }
+          var lines = [];
+          lines.push('Report: ' + (detail.report.title || '-'));
+          lines.push('Typ: ' + (detail.report.report_type || '-'));
+          lines.push('Erstellt: ' + (detail.report.created_at || '-'));
+          lines.push('--- Einträge ---');
+          (detail.entries || []).slice(0, 80).forEach(function(e) {
+            lines.push('#' + e.line_no + ' | ' + e.label + ' | ' + money(e.amount));
+          });
+          panel.textContent = lines.join('\n');
+        });
+      });
+    });
   });
 }
 
@@ -162,6 +274,7 @@ function render() {
   if (state.tab === 'dashboard') return renderDashboard();
   if (state.tab === 'private') return renderPrivate();
   if (state.tab === 'business') return renderBusiness();
+  if (state.tab === 'companies') return renderCompanies();
   if (state.tab === 'transactions') return renderTransactions();
   if (state.tab === 'reports') return renderReports();
   if (state.tab === 'mapping') return renderMapping();
@@ -176,30 +289,18 @@ tabs.forEach(function(tab) {
 window.addEventListener('message', function(event) {
   var msg = event.data || {};
   if (msg.action === 'open') {
-    console.log('[doj_finance_suite][nui] open message received', msg);
     app.classList.remove('hidden');
-    content.innerHTML = '<div class=\"card\"><h3>Tablet wird geladen...</h3><div class=\"small\">Falls Datenzugriff eingeschränkt ist, bleibt die Ansicht trotzdem geöffnet.</div></div>';
-    try {
-      setTab('dashboard');
-    } catch (e) {
-      console.error('[doj_finance_suite][nui] open->setTab failed', e);
-    }
-    return;
-  }
-
-  if (msg.action === 'hydrate') {
-    console.log('[doj_finance_suite][nui] hydrate message received', msg);
+    content.innerHTML = '<div class="card"><h3>Tablet wird geladen...</h3><div class="small">Lade Dashboard...</div></div>';
+    setTab('dashboard');
     return;
   }
 
   if (msg.action === 'close') {
-    console.log('[doj_finance_suite][nui] close message received');
     app.classList.add('hidden');
   }
 });
 
 window.addEventListener('load', function() {
-  console.log('[doj_finance_suite][nui] window loaded, sending uiReady');
   post('uiReady', {}).catch(function() {});
 });
 
