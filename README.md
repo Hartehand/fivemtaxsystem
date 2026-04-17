@@ -18,6 +18,7 @@ Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Report
 - **Links produktiv integriert** (`doj_finance_links` für manuelle/automatische Zahlungszuordnung).
 - **Erweitertes Reportcenter** mit mehreren Reporttypen und Filtern.
 - **Interaktion korrigiert**: fester Point/NPC statt globalem Player-Target.
+- **Aktive okokbanking_transactions-Auswertung** für Zahlungsanalyse, Verlauf, Matching und Risikoerkennung (inkl. robustem Date-Parsing trotz `varchar`).
 
 ---
 
@@ -65,6 +66,7 @@ SQL: `sql/doj_finance_suite.sql`
 - auffällige Transaktionsspikes (7/30/90 Tage)
 - hohe Eingänge ohne erkennbare Steuerbegleichung
 - manuelle Prüf-/Mahnmarker
+- withdraw/deposit/transfer-Verteilung pro Zeitraum
 
 Alle Gewichte/Schwellenwerte sind in `config.lua -> Config.RiskEngine` konfigurierbar.
 
@@ -107,6 +109,16 @@ Wenn kein Override vorhanden ist:
   - Society-Namen
   - Betrag vs. Restschuld
   - Zeitraum-Nähe zur Steuerperiode
+  - Transaktionstyp (`withdraw`, `deposit`, `transfer`) und Richtung
+
+### Hinweis zu `okokbanking_transactions.date` (varchar)
+
+Die Resource behandelt `date` robust und unterstützt mehrere Formate (z. B. `YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS`, `DD.MM.YYYY`, `DD/MM/YYYY`) für:
+
+- Zeitraumfilter
+- 7/30/90-Tage-Verläufe
+- Trend-/Spike-Erkennung
+- Report-Auswertung
 
 ---
 
@@ -137,6 +149,8 @@ Unterstützte Typen:
 - `business_fall`
 - `zahlungsreport`
 - `unternehmens_risiko`
+- `transaktionsauffaelligkeit`
+- `zahlungsverhalten`
 
 Reportcenter bietet Listen-/Detailansicht und Filter nach Typ/Zeitraum.
 

@@ -367,7 +367,9 @@ local function openReports()
                             { value = 'privat_fall', label = 'privat_fall' },
                             { value = 'business_fall', label = 'business_fall' },
                             { value = 'zahlungsreport', label = 'zahlungsreport' },
-                            { value = 'unternehmens_risiko', label = 'unternehmens_risiko' }
+                            { value = 'unternehmens_risiko', label = 'unternehmens_risiko' },
+                            { value = 'transaktionsauffaelligkeit', label = 'transaktionsauffaelligkeit' },
+                            { value = 'zahlungsverhalten', label = 'zahlungsverhalten' }
                         }
                     },
                     { type = 'input', label = 'Arg1 (tax_id oder job oder from)', required = false },
@@ -414,6 +416,54 @@ local function openReports()
     lib.showContext('doj_finance_reports')
 end
 
+local function openTransactions()
+    local input = lib.inputDialog('Transaktionsanalyse', {
+        { type = 'input', label = 'Suche (optional)', required = false },
+        { type = 'input', label = 'Von YYYY-MM-DD', required = false },
+        { type = 'input', label = 'Bis YYYY-MM-DD', required = false }
+    })
+
+    local payload = lib.callback.await('doj_finance_suite:server:getTransactions', false, {
+        search = input and input[1] or '',
+        from = input and input[2] or '',
+        to = input and input[3] or ''
+    }, 1, 50)
+
+    if not payload then
+        return notify('Transaktionen konnten nicht geladen werden.', 'error')
+    end
+
+    local options = {
+        {
+            title = ('Analyse-Score: %s (%s)'):format(payload.analysis.score, payload.analysis.band),
+            description = table.concat(payload.analysis.reasons, ' | ')
+        },
+        {
+            title = ('Offene Steuerlast (Business): $%s'):format(FinanceUtils.formatMoney(payload.openDebt or 0)),
+            description = ('7T Ein/Aus: $%s / $%s'):format(
+                FinanceUtils.formatMoney((payload.windows[7] and payload.windows[7].incoming) or 0),
+                FinanceUtils.formatMoney((payload.windows[7] and payload.windows[7].outgoing) or 0)
+            )
+        }
+    }
+
+    for _, tx in ipairs(payload.rows or {}) do
+        options[#options + 1] = {
+            title = ('TX#%s %s | $%s'):format(tx.id, tx.type or '-', FinanceUtils.formatMoney(tx.value)),
+            description = ('%s -> %s | %s'):format(tx.sender_name or '-', tx.receiver_name or '-', tx.date or '-')
+        }
+    end
+
+    lib.registerContext({
+        id = 'doj_finance_transactions',
+        title = ('Transaktionsanalyse (%s)'):format(payload.count or 0),
+        menu = 'doj_finance_root',
+        options = options
+    })
+
+    lib.showContext('doj_finance_transactions')
+end
+
 local function openBusinessMapping()
     local rows = lib.callback.await('doj_finance_suite:server:getBusinessMaps', false) or {}
     local options = {
@@ -458,6 +508,7 @@ local function openRoot()
             { title = 'Privatsteuer-Fälle', description = 'Listen- & Detailansicht', onSelect = openPrivateTaxes },
             { title = 'Business-Steuerfälle', description = 'job+period mit Mapping', onSelect = openBusinessTaxes },
             { title = 'Businessprofil', description = 'Finanzprofil / Risiko / Verlauf', onSelect = openBusinesses },
+            { title = 'Transaktionsanalyse', description = 'okokbanking_transactions aktiv auswerten', onSelect = openTransactions },
             { title = 'Reportcenter', description = 'Reports erstellen/anzeigen/filtern', onSelect = openReports },
             { title = 'Business-Mapping', description = 'tax_job -> business_id', onSelect = openBusinessMapping }
         }

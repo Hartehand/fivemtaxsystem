@@ -152,53 +152,59 @@ function FinanceDB.fetchTransactions(filters, page, pageSize)
         params[#params + 1] = w
     end
 
-    if filters.from and filters.from ~= '' then
-        clauses[#clauses + 1] = 'date >= ?'
-        params[#params + 1] = filters.from
-    end
-
-    if filters.to and filters.to ~= '' then
-        clauses[#clauses + 1] = 'date <= ?'
-        params[#params + 1] = filters.to
-    end
-
     local where = table.concat(clauses, ' AND ')
-    local _, limit, offset = FinanceUtils.clampPage(page, pageSize)
-    local count = MySQL.scalar.await(('SELECT COUNT(*) FROM okokbanking_transactions WHERE %s'):format(where), params) or 0
-
-    params[#params + 1] = limit
-    params[#params + 1] = offset
-    local rows = MySQL.query.await([[
+    local seedRows = MySQL.query.await([[
         SELECT id, receiver_identifier, receiver_name, sender_identifier, sender_name, date, value, type
         FROM okokbanking_transactions
         WHERE %s
         ORDER BY date DESC, id DESC
-        LIMIT ? OFFSET ?
+        LIMIT 2000
     ]]:format(where), params) or {}
+
+    local fromTs = FinanceUtils.parseDate(filters.from)
+    local toTs = FinanceUtils.parseDate(filters.to)
+    local filtered = {}
+    for _, row in ipairs(seedRows) do
+        local txTs = FinanceUtils.parseDate(row.date)
+        local valid = true
+        if fromTs and txTs and txTs < fromTs then valid = false end
+        if toTs and txTs and txTs > toTs then valid = false end
+        if (fromTs or toTs) and not txTs then valid = false end
+        if valid then filtered[#filtered + 1] = row end
+    end
+
+    local _, limit, offset = FinanceUtils.clampPage(page, pageSize)
+    local count = #filtered
+    local rows = {}
+    for i = offset + 1, math.min(offset + limit, #filtered) do
+        rows[#rows + 1] = filtered[i]
+    end
 
     return rows, count
 end
 
 function FinanceDB.fetchTransactionsByDateRange(fromDate, toDate)
-    local clauses = { '1=1' }
-    local params = {}
-
-    if fromDate then
-        clauses[#clauses + 1] = 'date >= ?'
-        params[#params + 1] = fromDate
-    end
-
-    if toDate then
-        clauses[#clauses + 1] = 'date <= ?'
-        params[#params + 1] = toDate
-    end
-
-    return MySQL.query.await([[
+    local rows = MySQL.query.await([[
         SELECT id, receiver_identifier, receiver_name, sender_identifier, sender_name, date, value, type
         FROM okokbanking_transactions
-        WHERE %s
         ORDER BY date DESC, id DESC
-    ]]:format(table.concat(clauses, ' AND ')), params) or {}
+        LIMIT 5000
+    ]]) or {}
+
+    local fromTs = FinanceUtils.parseDate(fromDate)
+    local toTs = FinanceUtils.parseDate(toDate)
+    local filtered = {}
+    for _, row in ipairs(rows) do
+        local ts = FinanceUtils.parseDate(row.date)
+        if ts then
+            local valid = true
+            if fromTs and ts < fromTs then valid = false end
+            if toTs and ts > toTs then valid = false end
+            if valid then filtered[#filtered + 1] = row end
+        end
+    end
+
+    return filtered
 end
 
 function FinanceDB.fetchSinglePrivateTax(id)

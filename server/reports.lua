@@ -139,6 +139,46 @@ function FinanceReports.generate(source, reportType, payload)
         return addReport('unternehmens_risiko', 'Unternehmens-Risikoreport', actor, nil, nil, {
             anzahl = #entries
         }, entries)
+    elseif reportType == 'transaktionsauffaelligkeit' then
+        local fromDate = payload.from or os.date('%Y-%m-%d', os.time() - 90 * 86400)
+        local toDate = payload.to or os.date('%Y-%m-%d')
+        local rows = FinanceDB.fetchTransactionsByDateRange(fromDate, toDate)
+        local analysis, windows = FinanceAnalytics.buildTransactionAnalysis(rows, FinanceUtils.safeNumber(payload.open_debt))
+        local entries = {}
+        for i = 1, math.min(150, #rows) do
+            local tx = rows[i]
+            entries[#entries + 1] = {
+                source_type = Config.RecordTypes.transaction,
+                source_id = tx.id,
+                label = ('TX#%s %s -> %s'):format(tx.id, tx.sender_name or '-', tx.receiver_name or '-'),
+                amount = tx.value,
+                payload = tx
+            }
+        end
+
+        return addReport('transaktionsauffaelligkeit', ('Transaktions-Auffälligkeitsreport %s bis %s'):format(fromDate, toDate), actor, fromDate, toDate, {
+            score = analysis.score,
+            band = analysis.band,
+            reasons = analysis.reasons,
+            windows = windows
+        }, entries)
+    elseif reportType == 'zahlungsverhalten' then
+        local rows = MySQL.query.await('SELECT job, job_label, period, amount, paid_amount, delayed_amount, is_paid FROM taxes_business ORDER BY period DESC LIMIT 400') or {}
+        local entries = {}
+        for _, row in ipairs(rows) do
+            local computed = FinanceAnalytics.computeBusinessTaxRow(row)
+            entries[#entries + 1] = {
+                source_type = Config.RecordTypes.taxes_business,
+                source_key = FinanceUtils.businessKey(row.job, row.period),
+                label = ('%s %s'):format(row.job, row.period),
+                amount = computed.restschuld,
+                payload = computed
+            }
+        end
+
+        return addReport('zahlungsverhalten', 'Zahlungsverhaltensreport', actor, nil, nil, {
+            anzahl = #entries
+        }, entries)
     end
 
     return nil

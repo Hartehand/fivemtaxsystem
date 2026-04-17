@@ -221,7 +221,14 @@ end)
 lib.callback.register('doj_finance_suite:server:getTransactions', function(source, filters, page, pageSize)
     assertAccess(source)
     local rows, count = FinanceDB.fetchTransactions(filters, page, pageSize)
-    return { rows = rows, count = count }
+    local openDebt = 0
+    local debtRows = MySQL.query.await('SELECT amount, paid_amount, delayed_amount, is_paid FROM taxes_business WHERE is_paid = 0') or {}
+    for _, d in ipairs(debtRows) do
+        openDebt = openDebt + math.max(0, FinanceUtils.safeNumber(d.amount) - FinanceUtils.safeNumber(d.paid_amount) + FinanceUtils.safeNumber(d.delayed_amount))
+    end
+
+    local analysis, windows = FinanceAnalytics.buildTransactionAnalysis(rows, openDebt)
+    return { rows = rows, count = count, analysis = analysis, windows = windows, openDebt = openDebt }
 end)
 
 lib.callback.register('doj_finance_suite:server:listReports', function(source, filters)

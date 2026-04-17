@@ -87,13 +87,54 @@ function FinanceUtils.normalizeDateString(value)
 end
 
 function FinanceUtils.parseDate(value)
-    local normalized = FinanceUtils.normalizeDateString(value)
-    if not normalized then
+    if value == nil then
         return nil
     end
 
-    local y, m, d = normalized:match('^(%d%d%d%d)%-(%d%d)%-(%d%d)$')
-    return os.time({ year = tonumber(y), month = tonumber(m), day = tonumber(d), hour = 0, min = 0, sec = 0 })
+    if type(value) == 'number' then
+        if value > 1000000000 then
+            return value
+        end
+        return nil
+    end
+
+    local raw = tostring(value)
+
+    local y, m, d, hh, mm, ss = raw:match('^(%d%d%d%d)%-(%d%d)%-(%d%d)[ T](%d%d):(%d%d):?(%d?%d?)')
+    if y and m and d then
+        return os.time({
+            year = tonumber(y),
+            month = tonumber(m),
+            day = tonumber(d),
+            hour = tonumber(hh) or 0,
+            min = tonumber(mm) or 0,
+            sec = tonumber(ss) or 0
+        })
+    end
+
+    local y2, m2, d2 = raw:match('^(%d%d%d%d)%-(%d%d)%-(%d%d)')
+    if y2 and m2 and d2 then
+        return os.time({ year = tonumber(y2), month = tonumber(m2), day = tonumber(d2), hour = 0, min = 0, sec = 0 })
+    end
+
+    local d3, m3, y3, hh3, mm3, ss3 = raw:match('^(%d%d)%.(%d%d)%.(%d%d%d%d)[ T]?(%d?%d?):?(%d?%d?):?(%d?%d?)')
+    if d3 and m3 and y3 then
+        return os.time({
+            year = tonumber(y3),
+            month = tonumber(m3),
+            day = tonumber(d3),
+            hour = tonumber(hh3) or 0,
+            min = tonumber(mm3) or 0,
+            sec = tonumber(ss3) or 0
+        })
+    end
+
+    local d4, m4, y4 = raw:match('^(%d%d)/(%d%d)/(%d%d%d%d)')
+    if d4 and m4 and y4 then
+        return os.time({ year = tonumber(y4), month = tonumber(m4), day = tonumber(d4), hour = 0, min = 0, sec = 0 })
+    end
+
+    return nil
 end
 
 function FinanceUtils.dateAddDays(dateValue, dueDays)
@@ -162,4 +203,26 @@ function FinanceUtils.periodToRange(period)
 
     local toTs = os.time({ year = nextYear, month = nextMonth, day = 1, hour = 0, min = 0, sec = 0 }) - 86400
     return from, os.date('%Y-%m-%d', toTs)
+end
+
+function FinanceUtils.txDirection(txType, value)
+    local t = tostring(txType or ''):lower()
+    local v = FinanceUtils.safeNumber(value)
+    local absV = math.abs(v)
+
+    if t == 'deposit' then
+        return 'incoming', absV
+    elseif t == 'withdraw' then
+        return 'outgoing', absV
+    elseif t == 'transfer' then
+        if v >= 0 then
+            return 'incoming', absV
+        end
+        return 'outgoing', absV
+    end
+
+    if v >= 0 then
+        return 'incoming', absV
+    end
+    return 'outgoing', absV
 end

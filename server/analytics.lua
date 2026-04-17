@@ -214,7 +214,7 @@ local function txWindowMetrics(transactions)
     local now = os.time()
     local windows = {}
     for _, days in ipairs(Config.RiskEngine.windowsDays) do
-        windows[days] = { incoming = 0, outgoing = 0, count = 0 }
+        windows[days] = { incoming = 0, outgoing = 0, count = 0, byType = { deposit = 0, withdraw = 0, transfer = 0, other = 0 } }
     end
 
     for _, tx in ipairs(transactions) do
@@ -224,11 +224,18 @@ local function txWindowMetrics(transactions)
             for _, days in ipairs(Config.RiskEngine.windowsDays) do
                 if age <= days then
                     windows[days].count = windows[days].count + 1
-                    if FinanceUtils.safeNumber(tx.value) >= 0 then
-                        windows[days].incoming = windows[days].incoming + FinanceUtils.safeNumber(tx.value)
+                    local direction, amount = FinanceUtils.txDirection(tx.type, tx.value)
+                    if direction == 'incoming' then
+                        windows[days].incoming = windows[days].incoming + amount
                     else
-                        windows[days].outgoing = windows[days].outgoing + math.abs(FinanceUtils.safeNumber(tx.value))
+                        windows[days].outgoing = windows[days].outgoing + amount
                     end
+
+                    local txType = tostring(tx.type or ''):lower()
+                    if txType ~= 'deposit' and txType ~= 'withdraw' and txType ~= 'transfer' then
+                        txType = 'other'
+                    end
+                    windows[days].byType[txType] = (windows[days].byType[txType] or 0) + 1
                 end
             end
         end
@@ -296,6 +303,7 @@ function FinanceAnalytics.computeBusinessRisk(profile, businessTaxes, linkedTran
     local windows = txWindowMetrics(linkedTransactions)
     local last7 = windows[7]
     local last30 = windows[30]
+    local last90 = windows[90]
     if last7 and last30 and last30.incoming > 0 then
         local extrapolated = last7.incoming * 4
         if extrapolated > (last30.incoming * rules.unusualTxSpikeFactor) then
@@ -307,6 +315,11 @@ function FinanceAnalytics.computeBusinessRisk(profile, businessTaxes, linkedTran
     if last30 and last30.incoming >= rules.highIncomingMin and restDebt > 0 and (societyBalance + last30.incoming) > (restDebt * rules.highIncomingUnpaidFactor) then
         score = score + w.incomingWithoutTaxSettlement
         reasons[#reasons + 1] = 'Hohe Zahlungseingänge ohne erkennbare Steuerbegleichung'
+    end
+
+    if last90 and last90.byType and last90.byType.withdraw and last90.byType.deposit and last90.byType.withdraw > (last90.byType.deposit * 2) and restDebt > 0 then
+        score = score + 8
+        reasons[#reasons + 1] = 'Überdurchschnittlich viele Withdraws bei offener Steuerlast'
     end
 
     local warningStatuses = 0
@@ -357,6 +370,7 @@ function FinanceAnalytics.matchTransactionToBusiness(tx, job, businessId, societ
     end
 
     local absValue = math.abs(FinanceUtils.safeNumber(tx.value))
+    local direction, _ = FinanceUtils.txDirection(tx.type, tx.value)
     if restDebt > 0 then
         local diffRatio = math.abs(absValue - restDebt) / restDebt
         if diffRatio <= 0.15 then
@@ -377,6 +391,10 @@ function FinanceAnalytics.matchTransactionToBusiness(tx, job, businessId, societ
         end
     end
 
+    if direction == 'incoming' and (tostring(tx.type or ''):lower() == 'deposit' or tostring(tx.type or ''):lower() == 'transfer') then
+        score = score + 5
+    end
+
     local quality = 'manuell_pruefen'
     if score >= 70 then
         quality = 'eindeutig'
@@ -388,6 +406,40 @@ function FinanceAnalytics.matchTransactionToBusiness(tx, job, businessId, societ
         confidence = math.min(100, score),
         quality = quality
     }
+end
+
+function FinanceAnalytics.buildTransactionAnalysis(transactions, openDebt)
+    local windows = txWindowMetrics(transactions)
+    local reasons = {}
+    local score = 0
+
+    local w7, w30, w90 = windows[7] or {}, windows[30] or {}, windows[90] or {}
+    local incoming7 = FinanceUtils.safeNumber(w7.incoming)
+    local incoming30 = FinanceUtils.safeNumber(w30.incoming)
+    local outgoing30 = FinanceUtils.safeNumber(w30.outgoing)
+    local incoming90 = FinanceUtils.safeNumber(w90.incoming)
+
+    if incoming30 > 0 and (incoming7 * 4) > (incoming30 * Config.RiskEngine.rules.unusualTxSpikeFactor) then
+        score = score + 20
+        reasons[#reasons + 1] = 'Ungewöhnlicher Eingangssprung in den letzten 7 Tagen'
+    end
+
+    if outgoing30 > incoming30 * 1.5 and openDebt > 0 then
+        score = score + 18
+        reasons[#reasons + 1] = 'Hohe Ausgänge bei gleichzeitig offener Steuerlast'
+    end
+
+    if openDebt > 0 and incoming90 >= openDebt and incoming30 > 0 then
+        score = score + 12
+        reasons[#reasons + 1] = 'Ausreichende Eingänge, aber offene Steuerlast bleibt bestehen'
+    end
+
+    if w30.byType and (w30.byType.transfer or 0) > ((w30.byType.deposit or 0) + (w30.byType.withdraw or 0)) then
+        score = score + 8
+        reasons[#reasons + 1] = 'Auffällig hoher Transfer-Anteil (30 Tage)'
+    end
+
+    return FinanceAnalytics.scoreReasons(score, reasons), windows
 end
 
 function FinanceAnalytics.getDashboard()
