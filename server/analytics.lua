@@ -442,6 +442,81 @@ function FinanceAnalytics.buildTransactionAnalysis(transactions, openDebt)
     return FinanceAnalytics.scoreReasons(score, reasons), windows
 end
 
+function FinanceAnalytics.inferBusinessForTransaction(tx, businessRows, mapLookup)
+    local scores = {}
+    local reasons = {}
+
+    local function bump(businessId, value, reason)
+        local token = FinanceUtils.normalizeToken(businessId)
+        if token == '' then return end
+        scores[token] = (scores[token] or 0) + value
+        reasons[token] = reasons[token] or {}
+        reasons[token][#reasons[token] + 1] = reason
+    end
+
+    local senderId = FinanceUtils.normalizeToken(tx.sender_identifier)
+    local receiverId = FinanceUtils.normalizeToken(tx.receiver_identifier)
+    local senderName = FinanceUtils.normalizeToken(tx.sender_name)
+    local receiverName = FinanceUtils.normalizeToken(tx.receiver_name)
+    local businessJob = FinanceUtils.normalizeToken(tx.business_job)
+    local actorIdentifier = FinanceUtils.normalizeToken(tx.actor_identifier)
+
+    if mapLookup and mapLookup[businessJob] then
+        bump(mapLookup[businessJob], 70, 'Job-Mapping')
+    end
+    if mapLookup and mapLookup[receiverName] then
+        bump(mapLookup[receiverName], 45, 'Receiver Name Mapping')
+    end
+    if mapLookup and mapLookup[senderName] then
+        bump(mapLookup[senderName], 35, 'Sender Name Mapping')
+    end
+
+    for _, business in ipairs(businessRows or {}) do
+        local token = FinanceUtils.normalizeToken(business.id)
+        if token ~= '' then
+            if token == receiverId or token == senderId then
+                bump(business.id, 55, 'Identifier Match')
+            end
+            if token == receiverName or token == senderName then
+                bump(business.id, 35, 'Name Match')
+            end
+            if token == businessJob then
+                bump(business.id, 40, 'Business Job Match')
+            end
+            if token == actorIdentifier then
+                bump(business.id, 25, 'Actor Identifier Match')
+            end
+        end
+    end
+
+    local bestToken, bestScore = nil, 0
+    for token, score in pairs(scores) do
+        if score > bestScore then
+            bestToken = token
+            bestScore = score
+        end
+    end
+
+    if not bestToken then
+        return { business_id = nil, confidence = 0, mode = 'none', reasons = {} }
+    end
+
+    local businessId = bestToken
+    for _, business in ipairs(businessRows or {}) do
+        if FinanceUtils.normalizeToken(business.id) == bestToken then
+            businessId = business.id
+            break
+        end
+    end
+
+    return {
+        business_id = businessId,
+        confidence = math.min(100, bestScore),
+        mode = bestScore >= 70 and 'automatic' or 'suggested',
+        reasons = reasons[bestToken] or {}
+    }
+end
+
 function FinanceAnalytics.getDashboard()
     local db = rawget(_G, 'FinanceDB')
     if not db then

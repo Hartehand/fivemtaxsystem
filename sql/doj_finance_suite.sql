@@ -128,3 +128,18 @@ CREATE TABLE IF NOT EXISTS `doj_finance_business_map` (
   KEY `idx_business_id` (`business_id`),
   KEY `idx_alias` (`alias`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_transaction_map` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `transaction_table` VARCHAR(64) NOT NULL,
+  `transaction_id` BIGINT NOT NULL,
+  `business_id` VARCHAR(64) NOT NULL,
+  `assignment_mode` ENUM('manual','automatic','suggested') NOT NULL DEFAULT 'manual',
+  `comment` VARCHAR(255) NULL,
+  `assigned_by` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_tx_map` (`transaction_table`, `transaction_id`),
+  KEY `idx_business_id` (`business_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

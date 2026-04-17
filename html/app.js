@@ -97,17 +97,19 @@ function renderBusiness() {
 }
 
 function renderTransactions() {
-  content.innerHTML = '<div class="input-row"><input id="txSearch" placeholder="Suche Name/Identifier" /><input id="txFrom" placeholder="Von (YYYY-MM-DD)" /><input id="txTo" placeholder="Bis (YYYY-MM-DD)" /><select id="txType"><option value="">Alle Typen</option><option value="deposit">deposit</option><option value="withdraw">withdraw</option><option value="transfer">transfer</option></select><button id="applyTxFilter">Filter anwenden</button></div><div id="txResult"></div>';
+  content.innerHTML = '<div class="input-row"><input id="txSearch" placeholder="Suche Name/Identifier" /><input id="txFrom" placeholder="Von (YYYY-MM-DD)" /><input id="txTo" placeholder="Bis (YYYY-MM-DD)" /><select id="txType"><option value="">Alle Typen</option><option value="deposit">deposit</option><option value="withdraw">withdraw</option><option value="transfer">transfer</option></select><select id="txSource"><option value="">Alle Quellen</option><option value="okokbanking_transactions">Okokbanking</option><option value="bossmenu_transactions">Bossmenu</option></select><button id="applyTxFilter">Filter anwenden</button></div><div id="txResult"></div>';
 
   function loadTransactions() {
     var filters = {
       search: (document.getElementById('txSearch') || {}).value || '',
       from: (document.getElementById('txFrom') || {}).value || '',
-      to: (document.getElementById('txTo') || {}).value || ''
+      to: (document.getElementById('txTo') || {}).value || '',
+      source: (document.getElementById('txSource') || {}).value || ''
     };
 
     post('getTransactions', { page: 1, pageSize: 120, filters: filters }).then(function(data) {
       var selectedType = ((document.getElementById('txType') || {}).value || '').toLowerCase();
+      var mappings = data.mappings || [];
       var rows = (data.rows || []).filter(function(tx) {
         if (!selectedType) return true;
         return ((tx.type || '').toLowerCase() === selectedType);
@@ -117,12 +119,41 @@ function renderTransactions() {
       var w = data.windows || {};
       var w7 = w[7] || { incoming: 0, outgoing: 0 };
       var txRows = rows.map(function(tx) {
-        return '<tr><td>' + tx.id + '</td><td>' + (tx.type || '-') + '</td><td>' + money(tx.value) + '</td><td>' + (tx.sender_name || '-') + '</td><td>' + (tx.receiver_name || '-') + '</td><td>' + (tx.date || '-') + '</td></tr>';
+        var assignment = tx.assigned_business_id || '-';
+        var source = tx.source_label || tx.source_table || '-';
+        var selector = '<select data-assign-select="' + (tx.source_table || 'okokbanking_transactions') + ':' + tx.id + '"><option value="">Unternehmen wählen</option>' + mappings.map(function(m) {
+          var selected = (m.business_id === tx.assigned_business_id) ? ' selected' : '';
+          return '<option value="' + m.business_id + '"' + selected + '>' + m.business_id + ' (' + m.tax_job + ')</option>';
+        }).join('') + '</select>';
+        var info = tx.business_inference && tx.business_inference.confidence ? ('Auto: ' + safe(tx.business_inference.business_id, '-') + ' (' + tx.business_inference.confidence + '%)') : 'Auto: -';
+        return '<tr><td>' + tx.id + '</td><td>' + source + '</td><td>' + (tx.type || '-') + '</td><td>' + money(tx.value) + '</td><td>' + (tx.sender_name || tx.actor_name || '-') + '</td><td>' + (tx.receiver_name || tx.business_job || '-') + '</td><td>' + (tx.date || '-') + '</td><td>' + assignment + '</td><td>' + safe(tx.assignment_mode, '-') + '<br/><span class="small">' + info + '</span></td><td>' + selector + '<button data-assign="' + (tx.source_table || 'okokbanking_transactions') + ':' + tx.id + '">Zuordnen</button></td></tr>';
       }).join('');
 
       var result = document.getElementById('txResult');
       if (!result) return;
-      result.innerHTML = '<div class="grid"><div class="card"><h3>Analyse Score</h3><div class="val">' + safe(analysis.score, 0) + '</div>' + badge(analysis.band) + '</div><div class="card"><h3>7T Eingänge</h3><div class="val">' + money(w7.incoming) + '</div></div><div class="card"><h3>7T Ausgänge</h3><div class="val">' + money(w7.outgoing) + '</div></div><div class="card"><h3>Gefilterte TX</h3><div class="val">' + rows.length + '</div></div></div><div class="detail-panel">' + ((analysis.reasons || []).join('\n') || 'Keine Auffälligkeit erkannt') + '</div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Betrag</th><th>Sender</th><th>Empfänger</th><th>Datum</th></tr></thead><tbody>' + txRows + '</tbody></table></div>';
+      result.innerHTML = '<div class="grid"><div class="card"><h3>Analyse Score</h3><div class="val">' + safe(analysis.score, 0) + '</div>' + badge(analysis.band) + '</div><div class="card"><h3>7T Eingänge</h3><div class="val">' + money(w7.incoming) + '</div></div><div class="card"><h3>7T Ausgänge</h3><div class="val">' + money(w7.outgoing) + '</div></div><div class="card"><h3>Gefilterte TX</h3><div class="val">' + rows.length + '</div></div></div><div class="detail-panel">' + ((analysis.reasons || []).join('\n') || 'Keine Auffälligkeit erkannt') + '</div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Typ</th><th>Betrag</th><th>Sender</th><th>Empfänger/Job</th><th>Datum</th><th>Unternehmen</th><th>Modus</th><th>Aktion</th></tr></thead><tbody>' + txRows + '</tbody></table></div>';
+
+      var assignButtons = document.querySelectorAll('[data-assign]');
+      assignButtons.forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var ref = btn.getAttribute('data-assign') || '';
+          var parts = ref.split(':');
+          var table = parts[0] || 'okokbanking_transactions';
+          var txId = Number(parts[1] || 0);
+          var selector = document.querySelector('[data-assign-select="' + ref + '"]');
+          var businessId = selector ? selector.value : '';
+          if (!businessId || !txId) return;
+
+          post('assignTransactionBusiness', {
+            transaction_table: table,
+            transaction_id: txId,
+            business_id: businessId,
+            comment: 'Manuelle Zuweisung aus Transaktions-Tab'
+          }).then(function() {
+            loadTransactions();
+          });
+        });
+      });
     });
   }
 

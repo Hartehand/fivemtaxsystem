@@ -228,6 +228,24 @@ end)
 lib.callback.register('doj_finance_suite:server:getTransactions', function(source, filters, page, pageSize)
     assertAccess(source)
     local rows, count = FinanceDB.fetchTransactions(filters, page, pageSize)
+    local mapRows, mapLookup = FinanceDB.fetchBusinessMaps()
+    local businessRows = FinanceDB.fetchAllBusinessRefs()
+    local refs = {}
+    for _, tx in ipairs(rows) do
+        refs[#refs + 1] = { transaction_table = tx.source_table or Config.RecordTypes.transaction, transaction_id = tx.id }
+    end
+    local manualMap = FinanceDB.fetchTransactionAssignments(refs)
+
+    for _, tx in ipairs(rows) do
+        local key = (tx.source_table or Config.RecordTypes.transaction) .. ':' .. tostring(tx.id)
+        local manual = manualMap[key]
+        local inferred = FinanceAnalytics.inferBusinessForTransaction(tx, businessRows, mapLookup)
+        tx.business_inference = inferred
+        tx.assigned_business_id = manual and manual.business_id or inferred.business_id
+        tx.assignment_mode = manual and 'manual' or inferred.mode
+        tx.assignment_comment = manual and manual.comment or nil
+    end
+
     local openDebt = 0
     local debtRows = MySQL.query.await('SELECT amount, paid_amount, delayed_amount, is_paid FROM taxes_business WHERE is_paid = 0') or {}
     for _, d in ipairs(debtRows) do
@@ -235,7 +253,27 @@ lib.callback.register('doj_finance_suite:server:getTransactions', function(sourc
     end
 
     local analysis, windows = FinanceAnalytics.buildTransactionAnalysis(rows, openDebt)
-    return { rows = rows, count = count, analysis = analysis, windows = windows, openDebt = openDebt }
+    return { rows = rows, count = count, analysis = analysis, windows = windows, openDebt = openDebt, mappings = mapRows }
+end)
+
+lib.callback.register('doj_finance_suite:server:assignTransactionBusiness', function(source, payload)
+    assertAccess(source)
+    local actor = getPlayer(source)
+    local identifier = actor and actor.getIdentifier and actor.getIdentifier() or 'system'
+    local ok = FinanceDB.upsertTransactionAssignment({
+        transaction_table = payload.transaction_table or Config.RecordTypes.transaction,
+        transaction_id = payload.transaction_id,
+        business_id = payload.business_id,
+        assignment_mode = 'manual',
+        comment = payload.comment,
+        assigned_by = identifier
+    })
+
+    FinanceReviews.addAudit(payload.transaction_table or Config.RecordTypes.transaction, payload.transaction_id, nil, 'transaction_business_assigned', identifier, {
+        business_id = payload.business_id,
+        comment = payload.comment
+    })
+    return ok and true or false
 end)
 
 lib.callback.register('doj_finance_suite:server:listReports', function(source, filters)

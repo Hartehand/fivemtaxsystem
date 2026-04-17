@@ -181,6 +181,11 @@ RegisterNUICallback('getBusinessMaps', function(_, cb)
     cb({ rows = rows or {} })
 end)
 
+RegisterNUICallback('assignTransactionBusiness', function(payload, cb)
+    local ok = lib.callback.await('doj_finance_suite:server:assignTransactionBusiness', false, payload)
+    cb({ ok = ok and true or false })
+end)
+
 local function setupInteraction()
     if Config.Interaction.npc.enabled then
         local model = Config.Interaction.npc.model

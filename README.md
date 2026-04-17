@@ -2,7 +2,7 @@
 
 ## Überblick
 
-`doj_finance_suite` ist eine ESX-Finanzsoftware für DOJ/TaxOffice-Backoffice auf Basis deiner bestehenden Tabellen (`taxes`, `taxes_business`, `vms_business`, `okokbanking_societies`, `okokbanking_transactions`).
+`doj_finance_suite` ist eine ESX-Finanzsoftware für DOJ/TaxOffice-Backoffice auf Basis deiner bestehenden Tabellen (`taxes`, `taxes_business`, `vms_business`, `okokbanking_societies`, `okokbanking_transactions`, optional `bossmenu_transactions`).
 
 Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Reports, Links, Business-Mapping) und lässt die Source-of-Truth-Daten unangetastet.
 
@@ -19,7 +19,7 @@ Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Report
 - **Links produktiv integriert** (`doj_finance_links` für manuelle/automatische Zahlungszuordnung).
 - **Erweitertes Reportcenter** mit mehreren Reporttypen und Filtern.
 - **Interaktion korrigiert**: fester Point/NPC statt globalem Player-Target.
-- **Aktive okokbanking_transactions-Auswertung** für Zahlungsanalyse, Verlauf, Matching und Risikoerkennung (inkl. robustem Date-Parsing trotz `varchar`).
+- **Aktive Transaktions-Auswertung** für `okokbanking_transactions` und optional `bossmenu_transactions` inkl. Quellenfilter, Zuordnungsvorschlägen und manueller Unternehmenszuordnung.
 
 ---
 
@@ -30,6 +30,7 @@ Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Report
 - `vms_business` (inkl. JSON-Feld `data`)
 - `okokbanking_societies`
 - `okokbanking_transactions`
+- `bossmenu_transactions` (optional)
 
 ## Neue Hilfstabellen
 
@@ -41,6 +42,7 @@ Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Report
 - `doj_finance_auditlog`
 - `doj_finance_links`
 - `doj_finance_business_map` (neu für robustes Job↔Business-Mapping)
+- `doj_finance_transaction_map` (manuelle/automatische TX→Unternehmen-Zuordnung)
 
 SQL: `sql/doj_finance_suite.sql`
 

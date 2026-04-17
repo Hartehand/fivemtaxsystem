@@ -1,4 +1,5 @@
 FinanceDB = { cache = {} }
+FinanceDB.schema = { tableExists = {}, tableColumns = {} }
 
 local function nowSeconds()
     return os.time()
@@ -131,12 +132,154 @@ function FinanceDB.fetchBusinessById(businessId)
     return MySQL.single.await('SELECT id, type, owner, employees, stock, data, announcements, orders, history FROM vms_business WHERE id = ?', { businessId })
 end
 
+function FinanceDB.fetchAllBusinessRefs()
+    return MySQL.query.await('SELECT id, type, owner FROM vms_business ORDER BY id ASC') or {}
+end
+
 function FinanceDB.fetchSocieties()
     return FinanceDB.cachedFetch('societies:all', Config.CacheTtlSeconds, [[
         SELECT society, society_name, value, iban, is_withdrawing
         FROM okokbanking_societies
         ORDER BY society_name ASC
     ]])
+end
+
+function FinanceDB.tableExists(tableName)
+    if FinanceDB.schema.tableExists[tableName] ~= nil then
+        return FinanceDB.schema.tableExists[tableName]
+    end
+
+    local exists = MySQL.scalar.await([[
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name = ?
+    ]], { tableName }) or 0
+
+    local value = exists > 0
+    FinanceDB.schema.tableExists[tableName] = value
+    return value
+end
+
+function FinanceDB.fetchTableColumns(tableName)
+    if FinanceDB.schema.tableColumns[tableName] then
+        return FinanceDB.schema.tableColumns[tableName]
+    end
+
+    if not FinanceDB.tableExists(tableName) then
+        FinanceDB.schema.tableColumns[tableName] = {}
+        return {}
+    end
+
+    local rows = MySQL.query.await('SHOW COLUMNS FROM `' .. tableName .. '`') or {}
+    local columns = {}
+    for _, row in ipairs(rows) do
+        columns[tostring(row.Field)] = true
+    end
+    FinanceDB.schema.tableColumns[tableName] = columns
+    return columns
+end
+
+local function pickColumn(columns, names)
+    for _, key in ipairs(names) do
+        if columns[key] then
+            return '`' .. key .. '`'
+        end
+    end
+    return 'NULL'
+end
+
+function FinanceDB.fetchBossmenuTransactions(filters)
+    filters = filters or {}
+    local tableName = 'bossmenu_transactions'
+    if not FinanceDB.tableExists(tableName) then
+        return {}
+    end
+
+    local cols = FinanceDB.fetchTableColumns(tableName)
+    if not cols.id then
+        return {}
+    end
+
+    local clauses, params = { '1=1' }, {}
+    local searchExpr = {
+        pickColumn(cols, { 'society', 'job' }),
+        pickColumn(cols, { 'name', 'player_name', 'author_name' }),
+        pickColumn(cols, { 'identifier', 'player_identifier', 'author_identifier' })
+    }
+
+    if filters.search and filters.search ~= '' then
+        local w = ('%%%s%%'):format(filters.search)
+        local likes = {}
+        for _, expr in ipairs(searchExpr) do
+            if expr ~= 'NULL' then
+                likes[#likes + 1] = expr .. ' LIKE ?'
+                params[#params + 1] = w
+            end
+        end
+        if #likes > 0 then
+            clauses[#clauses + 1] = '(' .. table.concat(likes, ' OR ') .. ')'
+        end
+    end
+
+    local typeExpr = pickColumn(cols, { 'type', 'action', 'transaction_type' })
+    if filters.type and filters.type ~= '' and typeExpr ~= 'NULL' then
+        clauses[#clauses + 1] = ('LOWER(%s) = ?'):format(typeExpr)
+        params[#params + 1] = tostring(filters.type):lower()
+    end
+
+    local where = table.concat(clauses, ' AND ')
+    local rows = MySQL.query.await(([[
+        SELECT
+            `id` AS id,
+            %s AS business_job,
+            %s AS actor_name,
+            %s AS actor_identifier,
+            %s AS tx_type,
+            %s AS amount,
+            %s AS tx_reason,
+            %s AS tx_date
+        FROM `%s`
+        WHERE %s
+        ORDER BY `id` DESC
+        LIMIT 2000
+    ]]):format(
+        pickColumn(cols, { 'society', 'job' }),
+        pickColumn(cols, { 'name', 'player_name', 'author_name' }),
+        pickColumn(cols, { 'identifier', 'player_identifier', 'author_identifier' }),
+        typeExpr,
+        pickColumn(cols, { 'amount', 'value' }),
+        pickColumn(cols, { 'reason', 'description', 'label' }),
+        pickColumn(cols, { 'date', 'created_at', 'time', 'timestamp' }),
+        tableName,
+        where
+    ), params) or {}
+
+    local out = {}
+    for _, row in ipairs(rows) do
+        local dateValue = row.tx_date
+        if type(dateValue) == 'number' then
+            dateValue = os.date('%Y-%m-%d %H:%M:%S', dateValue)
+        end
+
+        out[#out + 1] = {
+            id = row.id,
+            source_table = tableName,
+            source_label = 'Bossmenu',
+            business_job = row.business_job,
+            receiver_identifier = row.business_job,
+            receiver_name = row.business_job,
+            sender_identifier = row.actor_identifier,
+            sender_name = row.actor_name,
+            actor_identifier = row.actor_identifier,
+            actor_name = row.actor_name,
+            type = row.tx_type,
+            value = FinanceUtils.safeNumber(row.amount),
+            reason = row.tx_reason,
+            date = dateValue
+        }
+    end
+
+    return out
 end
 
 function FinanceDB.fetchTransactions(filters, page, pageSize)
@@ -160,6 +303,17 @@ function FinanceDB.fetchTransactions(filters, page, pageSize)
         ORDER BY date DESC, id DESC
         LIMIT 2000
     ]]):format(where), params) or {}
+    for _, row in ipairs(seedRows) do
+        row.source_table = 'okokbanking_transactions'
+        row.source_label = 'Okokbanking'
+    end
+
+    if (filters.source or '') ~= 'okokbanking_transactions' then
+        local bossRows = FinanceDB.fetchBossmenuTransactions(filters)
+        for _, row in ipairs(bossRows) do
+            seedRows[#seedRows + 1] = row
+        end
+    end
 
     local fromTs = FinanceUtils.parseDate(filters.from)
     local toTs = FinanceUtils.parseDate(filters.to)
@@ -167,11 +321,23 @@ function FinanceDB.fetchTransactions(filters, page, pageSize)
     for _, row in ipairs(seedRows) do
         local txTs = FinanceUtils.parseDate(row.date)
         local valid = true
+        if filters.source and filters.source ~= '' and row.source_table ~= filters.source then
+            valid = false
+        end
         if fromTs and txTs and txTs < fromTs then valid = false end
         if toTs and txTs and txTs > toTs then valid = false end
         if (fromTs or toTs) and not txTs then valid = false end
         if valid then filtered[#filtered + 1] = row end
     end
+
+    table.sort(filtered, function(a, b)
+        local aTs = FinanceUtils.parseDate(a.date) or 0
+        local bTs = FinanceUtils.parseDate(b.date) or 0
+        if aTs == bTs then
+            return FinanceUtils.safeNumber(a.id) > FinanceUtils.safeNumber(b.id)
+        end
+        return aTs > bTs
+    end)
 
     local _, limit, offset = FinanceUtils.clampPage(page, pageSize)
     local count = #filtered
@@ -181,6 +347,60 @@ function FinanceDB.fetchTransactions(filters, page, pageSize)
     end
 
     return rows, count
+end
+
+function FinanceDB.fetchTransactionAssignments(transactionRefs)
+    if not FinanceDB.tableExists('doj_finance_transaction_map') then
+        return {}
+    end
+
+    transactionRefs = transactionRefs or {}
+    if #transactionRefs == 0 then
+        return {}
+    end
+
+    local keys, params = {}, {}
+    for _, ref in ipairs(transactionRefs) do
+        keys[#keys + 1] = '(transaction_table = ? AND transaction_id = ?)'
+        params[#params + 1] = ref.transaction_table
+        params[#params + 1] = ref.transaction_id
+    end
+
+    local rows = MySQL.query.await(([[
+        SELECT transaction_table, transaction_id, business_id, assignment_mode, comment, assigned_by, updated_at
+        FROM doj_finance_transaction_map
+        WHERE %s
+    ]]):format(table.concat(keys, ' OR ')), params) or {}
+
+    local out = {}
+    for _, row in ipairs(rows) do
+        out[(row.transaction_table or '') .. ':' .. tostring(row.transaction_id)] = row
+    end
+    return out
+end
+
+function FinanceDB.upsertTransactionAssignment(payload)
+    if not FinanceDB.tableExists('doj_finance_transaction_map') then
+        return nil
+    end
+
+    return MySQL.insert.await([[
+        INSERT INTO doj_finance_transaction_map (transaction_table, transaction_id, business_id, assignment_mode, comment, assigned_by)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            business_id = VALUES(business_id),
+            assignment_mode = VALUES(assignment_mode),
+            comment = VALUES(comment),
+            assigned_by = VALUES(assigned_by),
+            updated_at = CURRENT_TIMESTAMP
+    ]], {
+        payload.transaction_table,
+        payload.transaction_id,
+        payload.business_id,
+        payload.assignment_mode,
+        payload.comment,
+        payload.assigned_by
+    })
 end
 
 function FinanceDB.fetchTransactionsByDateRange(fromDate, toDate)

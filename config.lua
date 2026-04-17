@@ -43,7 +43,8 @@ Config.RecordTypes = {
     taxes = 'taxes',
     taxes_business = 'taxes_business',
     business = 'vms_business',
-    transaction = 'okokbanking_transactions'
+    transaction = 'okokbanking_transactions',
+    transaction_bossmenu = 'bossmenu_transactions'
 }
 
 Config.SourceOfTruth = {
@@ -51,7 +52,8 @@ Config.SourceOfTruth = {
     taxesBusiness = 'taxes_business',
     business = 'vms_business',
     societies = 'okokbanking_societies',
-    transactions = 'okokbanking_transactions'
+    transactions = 'okokbanking_transactions',
+    transactionsBossmenu = 'bossmenu_transactions'
 }
 
 Config.Resolver = {
