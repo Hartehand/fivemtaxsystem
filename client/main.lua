@@ -15,9 +15,10 @@ local function notify(message, msgType)
 end
 
 local function sendOpenMessages()
+    local nowTick = GetGameTimer()
     local payload = {
         action = 'open',
-        opened_at = os.time(),
+        opened_at = nowTick,
         source = 'client_open'
     }
 
@@ -34,7 +35,7 @@ local function sendOpenMessages()
         SendNUIMessage({
             action = 'hydrate',
             payload = {
-                opened_at = os.time(),
+                opened_at = nowTick,
                 reason = 'retry_hydrate'
             }
         })
