@@ -22,7 +22,11 @@ function badge(band) {
 function setTab(tab) {
   state.tab = tab;
   tabs.forEach(function(t) { t.classList.toggle('active', t.dataset.tab === tab); });
-  render();
+  try {
+    render();
+  } catch (e) {
+    console.error('[doj_finance_suite][nui] render error', e);
+  }
 }
 
 function renderDashboard() {
@@ -171,7 +175,11 @@ window.addEventListener('message', function(event) {
   if (msg.action === 'open') {
     console.log('[doj_finance_suite][nui] open message received', msg);
     app.classList.remove('hidden');
-    setTab('dashboard');
+    try {
+      setTab('dashboard');
+    } catch (e) {
+      console.error('[doj_finance_suite][nui] open->setTab failed', e);
+    }
     return;
   }
 
