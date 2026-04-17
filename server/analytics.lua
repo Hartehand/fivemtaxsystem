@@ -12,6 +12,41 @@ local function getBusinessLookupRows()
     return rows
 end
 
+local function tokenSimilarity(a, b)
+    local left = FinanceUtils.normalizeToken(a)
+    local right = FinanceUtils.normalizeToken(b)
+    if left == '' or right == '' then
+        return 0
+    end
+    if left == right then
+        return 1
+    end
+    if left:find(right, 1, true) or right:find(left, 1, true) then
+        return 0.82
+    end
+
+    local maxLen = math.max(#left, #right)
+    local samePrefix = 0
+    for i = 1, math.min(#left, #right) do
+        if left:sub(i, i) == right:sub(i, i) then
+            samePrefix = samePrefix + 1
+        else
+            break
+        end
+    end
+
+    local leftSet, overlap = {}, 0
+    for i = 1, #left do leftSet[left:sub(i, i)] = true end
+    for i = 1, #right do
+        local c = right:sub(i, i)
+        if leftSet[c] then overlap = overlap + 1 end
+    end
+
+    local prefixScore = samePrefix / maxLen
+    local overlapScore = overlap / math.max(#right, 1)
+    return (prefixScore * 0.55) + (overlapScore * 0.45)
+end
+
 local function getBusinessIndex()
     local rows = MySQL.query.await('SELECT id, type, owner, employees, data FROM vms_business') or {}
     local byId = {}
@@ -459,6 +494,94 @@ function FinanceAnalytics.buildTransactionAnalysis(transactions, openDebt)
         reasons[#reasons + 1] = 'Auffällig hoher Transfer-Anteil (30 Tage)'
     end
 
+    local counterpartyTotals = {}
+    local dayTotals = {}
+    local roundTrip = {}
+    local burstIndex = {}
+    local totalVolume = 0
+
+    for _, tx in ipairs(transactions or {}) do
+        local ts = FinanceUtils.parseDate(tx.date)
+        local amount = math.abs(FinanceUtils.safeNumber(tx.value))
+        local sender = FinanceUtils.normalizeToken(tx.sender_identifier ~= '' and tx.sender_identifier or tx.sender_name)
+        local receiver = FinanceUtils.normalizeToken(tx.receiver_identifier ~= '' and tx.receiver_identifier or tx.receiver_name)
+        local cp = sender ~= '' and sender or receiver
+        if cp ~= '' then
+            counterpartyTotals[cp] = (counterpartyTotals[cp] or 0) + amount
+        end
+        totalVolume = totalVolume + amount
+
+        if ts then
+            local day = os.date('%Y-%m-%d', ts)
+            dayTotals[day] = (dayTotals[day] or 0) + amount
+            if sender ~= '' and receiver ~= '' then
+                local pair = sender .. '|' .. receiver
+                local reverse = receiver .. '|' .. sender
+                roundTrip[pair] = (roundTrip[pair] or 0) + 1
+                if (roundTrip[pair] or 0) >= 2 and (roundTrip[reverse] or 0) >= 2 then
+                    score = score + 4
+                    reasons[#reasons + 1] = ('Bidirektionale Zahlungszyklen erkannt (%s ↔ %s)'):format(sender, receiver)
+                    roundTrip[pair], roundTrip[reverse] = -999, -999
+                end
+            end
+
+            local burstKey = (cp ~= '' and cp or 'unknown') .. '|' .. tostring(FinanceUtils.round(amount)) .. '|' .. tostring(math.floor(ts / 600))
+            burstIndex[burstKey] = (burstIndex[burstKey] or 0) + 1
+        end
+    end
+
+    if totalVolume > 0 then
+        local topShare = 0
+        for _, v in pairs(counterpartyTotals) do
+            topShare = math.max(topShare, v / totalVolume)
+        end
+        if topShare >= 0.6 then
+            score = score + 10
+            reasons[#reasons + 1] = ('Starke Gegenpartei-Konzentration (%.0f%% des Volumens)'):format(topShare * 100)
+        elseif topShare >= 0.45 then
+            score = score + 6
+            reasons[#reasons + 1] = ('Erhöhte Gegenpartei-Konzentration (%.0f%%)'):format(topShare * 100)
+        end
+    end
+
+    local values, sum = {}, 0
+    for _, v in pairs(dayTotals) do
+        values[#values + 1] = v
+        sum = sum + v
+    end
+    if #values >= 7 then
+        local mean = sum / #values
+        local variance = 0
+        for _, v in ipairs(values) do
+            variance = variance + ((v - mean) * (v - mean))
+        end
+        variance = variance / #values
+        local stddev = math.sqrt(variance)
+        if stddev > 0 then
+            local spikeDays = 0
+            for _, v in ipairs(values) do
+                if (v - mean) / stddev >= 2.2 then
+                    spikeDays = spikeDays + 1
+                end
+            end
+            if spikeDays >= 2 then
+                score = score + math.min(12, spikeDays * 3)
+                reasons[#reasons + 1] = ('Mehrere Volumen-Ausreißer erkannt (%s Spike-Tage)'):format(spikeDays)
+            end
+        end
+    end
+
+    local burstCount = 0
+    for _, n in pairs(burstIndex) do
+        if n >= 3 then
+            burstCount = burstCount + 1
+        end
+    end
+    if burstCount > 0 then
+        score = score + math.min(10, burstCount * 2)
+        reasons[#reasons + 1] = ('Burst-Muster: gleiche Beträge in kurzer Zeit (%s Cluster)'):format(burstCount)
+    end
+
     return FinanceAnalytics.scoreReasons(score, reasons), windows
 end
 
@@ -493,6 +616,7 @@ function FinanceAnalytics.inferBusinessForTransaction(tx, businessRows, mapLooku
 
     for _, business in ipairs(businessRows or {}) do
         local token = FinanceUtils.normalizeToken(business.id)
+        local typeToken = FinanceUtils.normalizeToken(business.type)
         if token ~= '' then
             if token == receiverId or token == senderId then
                 bump(business.id, 55, 'Identifier Match')
@@ -505,6 +629,19 @@ function FinanceAnalytics.inferBusinessForTransaction(tx, businessRows, mapLooku
             end
             if token == actorIdentifier then
                 bump(business.id, 25, 'Actor Identifier Match')
+            end
+        end
+        if typeToken ~= '' then
+            local typeToReceiver = tokenSimilarity(typeToken, receiverName)
+            local typeToSender = tokenSimilarity(typeToken, senderName)
+            local idToReceiver = tokenSimilarity(token, receiverName)
+            local idToSender = tokenSimilarity(token, senderName)
+
+            if math.max(typeToReceiver, typeToSender) >= 0.74 then
+                bump(business.id, 24, 'Type Similarity Match')
+            end
+            if math.max(idToReceiver, idToSender) >= 0.8 then
+                bump(business.id, 20, 'ID Similarity Match')
             end
         end
     end
@@ -533,7 +670,8 @@ function FinanceAnalytics.inferBusinessForTransaction(tx, businessRows, mapLooku
         business_id = businessId,
         confidence = math.min(100, bestScore),
         mode = bestScore >= 70 and 'automatic' or 'suggested',
-        reasons = reasons[bestToken] or {}
+        reasons = reasons[bestToken] or {},
+        evidence_count = #(reasons[bestToken] or {})
     }
 end
 

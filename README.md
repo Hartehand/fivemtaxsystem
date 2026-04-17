@@ -9,6 +9,7 @@ Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Report
 ## Kernverbesserungen gegenüber der Beta
 
 - **Regelbasierte Risk Engine (0-100)** mit erklärbaren Gründen, kein Blackbox-System.
+- **Erweiterte Algorithmik**: Counterparty-Konzentration, Volumen-Ausreißer, Burst-/Roundtrip-Erkennung und fuzzy Token-Similarity für intelligenteres Matching.
 - **Korrigiertes Business-Matching**: primär über Mapping (`doj_finance_business_map`, `Config.BusinessJobMap`), fallback case-insensitive job↔business_id.
 - **Tablet-NUI statt Kontextmenüs** mit mehreren Arbeitsansichten (Dashboard, Fälle, Transaktionen, Reports, Mapping).
 - **Echte Fallakten** im Client:
