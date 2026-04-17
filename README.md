@@ -1,172 +1,144 @@
 # doj_finance_suite
 
-`doj_finance_suite` ist eine produktionsreife FiveM-Resource für **ESX + oxmysql + ox_lib**, die bestehende Steuer-/Finanzdaten als Finanzamt-Backoffice visualisiert und um Prüf-Workflow-Metadaten ergänzt.
+## Überblick
 
-## Zielbild
+`doj_finance_suite` ist eine ESX-Finanzsoftware für DOJ/TaxOffice-Backoffice auf Basis deiner bestehenden Tabellen (`taxes`, `taxes_business`, `vms_business`, `okokbanking_societies`, `okokbanking_transactions`).
 
-Die Resource baut **kein neues Steuersystem** auf, sondern arbeitet als Finanzsoftware-Dashboard auf bestehenden Tabellen:
+Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Reports, Links, Business-Mapping) und lässt die Source-of-Truth-Daten unangetastet.
 
-- `taxes` (Privatsteuerfälle)
-- `taxes_business` (Business-Steuerperioden)
-- `vms_business` (Business-Stammdaten / Kennzahlen im JSON-Feld `data`)
-- `okokbanking_societies` (Gesellschaftskonten)
-- `okokbanking_transactions` (Transaktionshistorie)
+## Kernverbesserungen gegenüber der Beta
 
-Diese Tabellen bleiben **Source of Truth**. Es werden nur zusätzliche Hilfstabellen für Workflow/Review/Reporting angelegt.
-
----
-
-## Features (Überblick)
-
-- **Dashboard** mit Kennzahlen zu offenen/bezahlten/stornierten Privatsteuern, offenen Business-Perioden, Verzug, Zuschlägen, Firmenlage und letzten Transaktionen.
-- **Privatsteuern-Ansicht** aus `taxes` inkl. Suche/Filter und Fälligkeitslogik.
-- **Business-Steuern-Ansicht** aus `taxes_business` inkl. Restschuld, Status (offen/teilweise/bezahlt), periodischer Auswertung.
-- **Business-Profile** aus `vms_business` inkl. defensivem JSON-Parsing von `data` (`balance`, `totalEarned`, `totalOrders`, `totalVehicles`, `totalSales`).
-- **Banking-Ansicht** aus `okokbanking_societies` + `okokbanking_transactions` inkl. Zuordnungsqualität `eindeutig | wahrscheinlich | manuell_pruefen`.
-- **Prüf- und Sachbearbeitungslogik** über neue Hilfstabellen (Status, Notizen, Audit).
-- **Report-Funktion** (Schuldnerreport / Periodenreport + Erweiterungsbasis).
-- **Berechtigungen** über Jobs und Admin-Gruppen.
-- **Caching + Pagination** zur Performance-Stabilisierung.
+- **Regelbasierte Risk Engine (0-100)** mit erklärbaren Gründen, kein Blackbox-System.
+- **Korrigiertes Business-Matching**: primär über Mapping (`doj_finance_business_map`, `Config.BusinessJobMap`), fallback case-insensitive job↔business_id.
+- **Echte Fallakten** im Client:
+  - Privatfall (`taxes.id`)
+  - Business-Fall (`job|period`)
+  - Business-Profil (`vms_business.id`)
+- **Deadlines produktiv integriert** (`doj_finance_deadlines` lesen/setzen/löschen).
+- **Links produktiv integriert** (`doj_finance_links` für manuelle/automatische Zahlungszuordnung).
+- **Erweitertes Reportcenter** mit mehreren Reporttypen und Filtern.
+- **Interaktion korrigiert**: fester Point/NPC statt globalem Player-Target.
 
 ---
 
-## Dateistruktur
+## Verwendete Source-of-Truth-Tabellen
 
-- `fxmanifest.lua`
-- `config.lua`
-- `shared/utils.lua`
-- `server/db.lua`
-- `server/analytics.lua`
-- `server/reviews.lua`
-- `server/reports.lua`
-- `server/main.lua`
-- `client/main.lua`
-- `sql/doj_finance_suite.sql`
+- `taxes`
+- `taxes_business`
+- `vms_business` (inkl. JSON-Feld `data`)
+- `okokbanking_societies`
+- `okokbanking_transactions`
 
----
+## Neue Hilfstabellen
 
-## Installation
+- `doj_finance_reviews`
+- `doj_finance_notes`
+- `doj_finance_reports`
+- `doj_finance_report_entries`
+- `doj_finance_deadlines`
+- `doj_finance_auditlog`
+- `doj_finance_links`
+- `doj_finance_business_map` (neu für robustes Job↔Business-Mapping)
 
-1. Ordner `doj_finance_suite` in deinen `resources`-Pfad legen.
-2. SQL aus `sql/doj_finance_suite.sql` auf deine Datenbank anwenden.
-3. In `server.cfg` sicherstellen:
-   - `ensure oxmysql`
-   - `ensure ox_lib`
-   - `ensure es_extended`
-   - `ensure doj_finance_suite`
-4. Optional: `ox_target` starten, falls die Target-Interaktion genutzt werden soll.
+SQL: `sql/doj_finance_suite.sql`
 
 ---
 
-## Konfiguration
+## Risk Engine (regelbasiert, nachvollziehbar)
 
-### `config.lua`
+### Scoreband
 
-Wichtige Punkte:
+- 0–24: unauffällig
+- 25–49: beobachten
+- 50–74: auffällig
+- 75–100: hochrisiko
 
-- `Config.DueDays`
-  - Due-Date-Berechnung für Privatsteuern:
-  - **`due_date = received_date + Config.DueDays`**
-- `Config.AllowedJobs`
-  - Erlaubte Backoffice-Jobs (standardmäßig `doj`, `government`, `taxoffice`, `clerk`)
-- `Config.AllowedGroups`
-  - Admin-Gruppen mit Zugriff
-- `Config.CacheTtlSeconds`, `Config.DefaultPageSize`, `Config.MaxPageSize`
-  - Performance und Pagination
-- `Config.Resolver`
-  - Optionaler Namens-/Identifier-Resolver
+### Bewertete Faktoren (Auszug)
 
----
+- offene/überfällige Fälle
+- wiederkehrend offene Perioden
+- Teilzahlungen
+- delayed_amount / late_fee_applied
+- Restschuld vs. Kontostand
+- Restschuld vs. totalEarned
+- ausreichende Liquidität trotz offener Steuerlast
+- auffällige Transaktionsspikes (7/30/90 Tage)
+- hohe Eingänge ohne erkennbare Steuerbegleichung
+- manuelle Prüf-/Mahnmarker
 
-## Bestehende Tabellen als Source of Truth
-
-### 1) `taxes`
-Verwendung:
-- Privatfälle lesen
-- Status ermitteln (`offen`, `bezahlt`, `storniert`, `fällig`, `überfällig`)
-- Summen/Counts fürs Dashboard
-
-### 2) `taxes_business`
-Verwendung:
-- Periodische Unternehmenssteuern
-- Restschuld-Berechnung:
-  - `restschuld = amount - paid_amount + delayed_amount`
-- Verzugsanalyse (`delayed_amount`) und Zuschläge (`late_fee_applied`)
-
-### 3) `vms_business`
-Verwendung:
-- Unternehmensprofil und Finanzkennzahlen
-- Feld `data` wird defensiv als JSON geparsed
-- Extrahierte Kennzahlen u. a.:
-  - `balance`
-  - `totalEarned`
-  - `totalOrders`
-  - `totalVehicles`
-  - `totalSales`
-
-### 4) `okokbanking_societies`
-Verwendung:
-- Society-Kontenübersicht
-- Kontostand-/Liquidity-Analysen
-
-### 5) `okokbanking_transactions`
-Verwendung:
-- Zahlungsbewegungen / Historie
-- Zeitraumfilter + Suche
-- logische Zuordnung zu Unternehmen/Steuerfällen mit Qualitätsstufe
+Alle Gewichte/Schwellenwerte sind in `config.lua -> Config.RiskEngine` konfigurierbar.
 
 ---
 
-## Hilfstabellen (neu)
+## Business-Matching (fachlich korrekt)
 
-Die SQL in `sql/doj_finance_suite.sql` erstellt nur ergänzende Workflow-/Meta-Tabellen:
+Reihenfolge:
+1. DB-Mapping `doj_finance_business_map`
+2. Konfigurations-Mapping `Config.BusinessJobMap`
+3. Alias-Auflösung `Config.BusinessJobAliases`
+4. Fallback job als business_id (case-insensitive Lookup)
 
-- `doj_finance_reviews` (Bearbeitungsstatus pro Fall)
-- `doj_finance_notes` (interne Prüfernotizen)
-- `doj_finance_reports` (Report-Metadaten)
-- `doj_finance_report_entries` (Report-Zeilen)
-- `doj_finance_deadlines` (optional manuelle Frist-Overrides)
-- `doj_finance_auditlog` (Audit-Trail)
-- `doj_finance_links` (optionale manuelle Verknüpfung von Zahlungen/Fällen)
-
-Wichtig: Keine Duplikation der Steuer-Source-Daten.
+**Wichtig:** `vms_business.type` dient nur als Sekundärinfo und nicht als Primär-Join-Key.
 
 ---
 
-## Business-Fall-Identifikation
+## Deadlines
 
-- Primärschlüssel für `taxes_business`-Fälle in der Resource:
-  - **`source_key = job .. '|' .. period`**
-- Damit können periodische Business-Fälle eindeutig in Review/Notiz/Audit referenziert werden, auch ohne numerische ID.
+`doj_finance_deadlines` wird aktiv verwendet:
 
----
+- Override für Privatfälle (`source_type=taxes`, `source_id=taxes.id`)
+- Override für Business-Fälle (`source_type=taxes_business`, `source_key=job|period`)
 
-## Due-Date-Logik für Privatsteuern
-
-Da `taxes` kein eigenes Due-Date-Feld enthält:
-
-- Default-Logik: `due_date = received_date + Config.DueDays`
-- Zustandsermittlung:
-  - `storniert`, wenn `canceled = 1`
-  - `bezahlt`, wenn `is_paid = 1`
-  - `ueberfaellig`, wenn offen und aktuelles Datum > Due-Date
-  - sonst `faellig`/`offen`
-
-Optional kann über `doj_finance_deadlines` ein Override gepflegt werden.
+Wenn kein Override vorhanden ist:
+- Privat: `received_date + Config.DueDays`
+- Business: `period_end + Config.DueDays`
 
 ---
 
-## Namens-/Identifier-Auflösung (ohne harte User-Tabellenannahme)
+## Links / Zahlungszuordnung
 
-Es gibt absichtlich **keine harte Abhängigkeit** auf unbekannte `users`-/Character-Schemata.
+`doj_finance_links` wird aktiv verwendet:
 
-Auflösung erfolgt in Reihenfolge:
+- manuelle Verknüpfung einer TX zu einem Steuerfall
+- Verknüpfung lösen
+- Qualitätsstufen: `eindeutig`, `wahrscheinlich`, `manuell_pruefen`
+- Auto-Vorschläge anhand:
+  - Mapping/Identifier
+  - Society-Namen
+  - Betrag vs. Restschuld
+  - Zeitraum-Nähe zur Steuerperiode
 
-1. vorhandene Felder aus Source-Tabellen (`receiver`, `receiver_name`, `sender_identifier`, `sender_name`, etc.)
-2. optional online über ESX `xPlayer` (`Config.Resolver.preferOnlinePlayerName`)
-3. optionaler Adapter via `Config.Resolver.userAdapter`
+---
 
-Damit bleibt die Resource schema-agnostisch und erweiterbar.
+## UI-Struktur (ox_lib)
+
+- Dashboard / Risikoanalyse
+- Privatsteuer-Fälle
+- Business-Steuerfälle
+- Businessprofil
+- Reportcenter
+- Business-Mapping
+- Fallaktionen:
+  - Status ändern
+  - Notiz hinzufügen
+  - Frist überschreiben/löschen
+  - Transaktion verknüpfen/lösen
+  - Aktenansicht mit Review/Notizen/Audit/Links
+
+---
+
+## Reports
+
+Unterstützte Typen:
+
+- `schuldnerreport`
+- `hochrisikoreport`
+- `privat_fall`
+- `business_fall`
+- `zahlungsreport`
+- `unternehmens_risiko`
+
+Reportcenter bietet Listen-/Detailansicht und Filter nach Typ/Zeitraum.
 
 ---
 
@@ -174,41 +146,44 @@ Damit bleibt die Resource schema-agnostisch und erweiterbar.
 
 - `/finance`
 - `/taxoffice`
-- `/finance_report [schuldnerreport|periodenreport] [YYYY-MM]`
+- `/finance_report <typ> [args]`
 - `/finance_debug_refresh`
 
-Nur für berechtigte Jobs/Gruppen.
+Beispiele:
+- `/finance_report schuldnerreport`
+- `/finance_report hochrisikoreport`
+- `/finance_report privat_fall 123`
+- `/finance_report business_fall pdm 2026-04`
+- `/finance_report zahlungsreport 2026-04-01 2026-04-30`
 
 ---
 
-## UI/UX
+## Interaktion (kein globales Player-Target)
 
-Deutschsprachige Backoffice-Menüs via `ox_lib`:
+`config.lua -> Config.Interaction`
 
-- Dashboard
-- Privatsteuern
-- Unternehmenssteuern
-- Unternehmen
-- Zahlungseingänge
-- Reports
-
-Aus den Listen heraus können Fälle geöffnet, Status gesetzt und Notizen erfasst werden.
+- optionaler NPC mit ox_target
+- fixer Interaktionspunkt mit Marker + TextUI
+- Command-Fallback bleibt erhalten
 
 ---
 
-## Performance-Hinweise
+## Installation
 
-- Serverseitige Pagination (`LIMIT/OFFSET`)
-- Caching von Aggregationen (Dashboard, Society-Listen)
-- Defensives JSON-Parsing
-- Indexierte Hilfstabellen
-- Cache-Invalidierung bei Review-Änderungen/Debug-Refresh
+1. SQL aus `sql/doj_finance_suite.sql` einspielen.
+2. Resource in `resources` legen.
+3. Sicherstellen:
+   - `ensure oxmysql`
+   - `ensure ox_lib`
+   - `ensure es_extended`
+   - `ensure doj_finance_suite`
+4. Interaktionspunkt/NPC in `config.lua` anpassen.
 
 ---
 
-## Erweiterungsideen
+## Hinweise
 
-- NUI-Frontend statt Kontextmenüs für große Datenmengen
-- zusätzliche Reporttypen (Monat, Auffälligkeit, Zahlungsverhalten)
-- automatische Deadline-Override-Pipelines
-- rollenbasierte feinere Rechte-Matrix pro Aktion
+- Kein QBCore, reine ESX-Implementierung.
+- Keine harte Abhängigkeit auf unbekannte Users-Tabellen.
+- Name-Resolver nutzt bestehende Felder + optional Online-ESX + optional Adapter.
+- Performance: Pagination, Caching, serverseitige Berechnung.

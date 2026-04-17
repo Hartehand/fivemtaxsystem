@@ -1,18 +1,20 @@
 FinanceAnalytics = {}
 
-local function sumField(rows, field)
-    local total = 0
+local function getBusinessIndex()
+    local rows = MySQL.query.await('SELECT id, type, owner, employees, data FROM vms_business') or {}
+    local byId = {}
     for _, row in ipairs(rows) do
-        total = total + FinanceUtils.safeNumber(row[field])
+        byId[FinanceUtils.normalizeToken(row.id)] = row
     end
-    return total
+    return rows, byId
 end
 
 function FinanceAnalytics.resolveDisplayName(identifier, fallback)
     local name = fallback
+    local esx = FinanceCore.getESX()
 
-    if Config.Resolver.preferOnlinePlayerName and identifier then
-        local xPlayer = ESX.GetPlayerFromIdentifier(identifier)
+    if Config.Resolver.preferOnlinePlayerName and identifier and esx and esx.GetPlayerFromIdentifier then
+        local xPlayer = esx.GetPlayerFromIdentifier(identifier)
         if xPlayer and xPlayer.getName then
             name = xPlayer.getName()
         end
@@ -26,6 +28,25 @@ function FinanceAnalytics.resolveDisplayName(identifier, fallback)
     end
 
     return name or identifier or 'Unbekannt'
+end
+
+function FinanceAnalytics.resolveBusinessIdForJob(job, runtimeMap)
+    local token = FinanceUtils.normalizeToken(job)
+    local map = runtimeMap or {}
+
+    if map[token] then
+        return map[token], 'db_map'
+    end
+
+    if Config.BusinessJobMap[token] then
+        return Config.BusinessJobMap[token], 'config_map'
+    end
+
+    if Config.BusinessJobAliases[token] and Config.BusinessJobMap[Config.BusinessJobAliases[token]] then
+        return Config.BusinessJobMap[Config.BusinessJobAliases[token]], 'config_alias'
+    end
+
+    return job, 'fallback_job_as_id'
 end
 
 local function parseBusinessData(row)
@@ -44,138 +65,21 @@ local function parseBusinessData(row)
     }
 end
 
-function FinanceAnalytics.getDashboard()
-    local cacheKey = 'dashboard:v1'
-    local cached = FinanceDB.cache[cacheKey]
-    local now = os.time()
-
-    if cached and now < cached.expiresAt then
-        return cached.value
-    end
-
-    local privateRows = MySQL.query.await([[SELECT amount, is_paid, canceled, received_date FROM taxes]]) or {}
-    local businessRows = MySQL.query.await([[SELECT job, amount, paid_amount, delayed_amount, late_fee_applied, is_paid FROM taxes_business]]) or {}
-    local businesses = MySQL.query.await([[SELECT id, data FROM vms_business]]) or {}
-    local societies = FinanceDB.fetchSocieties()
-    local transactions = MySQL.query.await([[SELECT id, receiver_name, sender_name, value, date, type FROM okokbanking_transactions ORDER BY date DESC LIMIT ?]], {
-        Config.DefaultRecentTransactionsLimit
-    }) or {}
-
-    local private = {
-        openCount = 0,
-        paidCount = 0,
-        canceledCount = 0,
-        openAmount = 0,
-        paidAmount = 0
-    }
-
-    local nowTs = os.time()
-    for _, row in ipairs(privateRows) do
-        local amount = FinanceUtils.safeNumber(row.amount)
-        if FinanceUtils.toBoolean(row.canceled) then
-            private.canceledCount = private.canceledCount + 1
-        elseif FinanceUtils.toBoolean(row.is_paid) then
-            private.paidCount = private.paidCount + 1
-            private.paidAmount = private.paidAmount + amount
-        else
-            private.openCount = private.openCount + 1
-            private.openAmount = private.openAmount + amount
-        end
-
-        local _, dueTs = FinanceUtils.dateAddDays(row.received_date, Config.DueDays)
-        row.isOverdue = dueTs and nowTs > dueTs and (not FinanceUtils.toBoolean(row.is_paid)) and (not FinanceUtils.toBoolean(row.canceled))
-    end
-
-    local business = {
-        openPeriods = 0,
-        openAmount = 0,
-        delayedAmount = 0,
-        lateFeeAmount = 0,
-        recurringDelays = {}
-    }
-
-    local companyOpenMap = {}
-    for _, row in ipairs(businessRows) do
-        local amount = FinanceUtils.safeNumber(row.amount)
-        local paidAmount = FinanceUtils.safeNumber(row.paid_amount)
-        local delayed = FinanceUtils.safeNumber(row.delayed_amount)
-        local lateFee = FinanceUtils.safeNumber(row.late_fee_applied)
-        local rest = amount - paidAmount + delayed
-        local isOpen = (not FinanceUtils.toBoolean(row.is_paid)) and rest > 0
-
-        if isOpen then
-            business.openPeriods = business.openPeriods + 1
-            business.openAmount = business.openAmount + rest
-            companyOpenMap[row.job] = (companyOpenMap[row.job] or 0) + 1
-        end
-
-        business.delayedAmount = business.delayedAmount + delayed
-        business.lateFeeAmount = business.lateFeeAmount + lateFee
-    end
-
-    local businessProfiles = {}
-    for _, row in ipairs(businesses) do
-        businessProfiles[#businessProfiles + 1] = parseBusinessData(row)
-    end
-
-    local flagged = {}
-    for _, profile in ipairs(businessProfiles) do
-        local relatedOpen = companyOpenMap[profile.type] or 0
-        local reason = nil
-
-        if relatedOpen >= Config.RiskRules.repeatedOpenPeriods then
-            reason = 'Mehrfach offene Perioden'
-        elseif profile.totalEarned > 0 and relatedOpen > 0 and business.openAmount > (profile.totalEarned * Config.RiskRules.highEarnedOpenTaxRatio) then
-            reason = 'Hohe Steuerlast bei hohem Umsatz'
-        elseif profile.balance < Config.RiskRules.lowBalanceOpenTaxThreshold and relatedOpen > 0 then
-            reason = 'Niedriger Kontostand bei offener Steuerlast'
-        end
-
-        if reason then
-            flagged[#flagged + 1] = {
-                business_id = profile.id,
-                business_type = profile.type,
-                owner = profile.owner,
-                reason = reason,
-                balance = profile.balance,
-                totalEarned = profile.totalEarned,
-                openPeriods = relatedOpen
-            }
-        end
-    end
-
-    local result = {
-        private = private,
-        business = business,
-        companies = {
-            total = #businessProfiles,
-            withOpenPeriods = 0,
-            societiesTotalBalance = sumField(societies, 'value')
-        },
-        flagged = flagged,
-        recentTransactions = transactions
-    }
-
-    for _, count in pairs(companyOpenMap) do
-        if count > 0 then
-            result.companies.withOpenPeriods = result.companies.withOpenPeriods + 1
-        end
-    end
-
-    FinanceDB.cache[cacheKey] = {
-        value = result,
-        expiresAt = now + Config.CacheTtlSeconds
-    }
-
-    return result
-end
-
-function FinanceAnalytics.computePrivateTaxRow(row)
-    local dueDate, dueTs = FinanceUtils.dateAddDays(row.received_date, Config.DueDays)
+function FinanceAnalytics.computePrivateTaxRow(row, deadline)
     local isPaid = FinanceUtils.toBoolean(row.is_paid)
     local isCanceled = FinanceUtils.toBoolean(row.canceled)
-    local nowTs = os.time()
+    local dueDate, dueTs
+    local dueSource = 'standard'
 
+    if deadline and deadline.due_date then
+        dueDate = deadline.due_date
+        dueTs = FinanceUtils.parseDate(dueDate)
+        dueSource = 'override'
+    else
+        dueDate, dueTs = FinanceUtils.dateAddDays(row.received_date, Config.DueDays)
+    end
+
+    local nowTs = os.time()
     local status = 'offen'
     if isCanceled then
         status = 'storniert'
@@ -193,28 +97,46 @@ function FinanceAnalytics.computePrivateTaxRow(row)
         receiver_name = FinanceAnalytics.resolveDisplayName(row.receiver, row.receiver_name),
         received_date = row.received_date,
         due_date = dueDate,
+        due_source = dueSource,
         title = row.title,
         amount = FinanceUtils.safeNumber(row.amount),
         is_paid = isPaid,
         paid_date = row.paid_date,
         canceled = isCanceled,
         status = status,
-        age_days = FinanceUtils.daysBetween(nowTs, FinanceUtils.parseDate(row.received_date)),
-        overdue_days = dueTs and math.max(0, FinanceUtils.daysBetween(nowTs, dueTs)) or 0
+        age_days = FinanceUtils.daysBetween(nowTs, FinanceUtils.parseDate(row.received_date)) or 0,
+        overdue_days = dueTs and math.max(0, FinanceUtils.daysBetween(nowTs, dueTs) or 0) or 0
     }
 end
 
-function FinanceAnalytics.computeBusinessTaxRow(row)
+function FinanceAnalytics.computeBusinessTaxRow(row, deadline)
     local amount = FinanceUtils.safeNumber(row.amount)
     local paid = FinanceUtils.safeNumber(row.paid_amount)
     local delayed = FinanceUtils.safeNumber(row.delayed_amount)
     local rest = amount - paid + delayed
-
     local status = 'offen'
+
     if FinanceUtils.toBoolean(row.is_paid) or rest <= 0 then
         status = 'bezahlt'
     elseif paid > 0 then
         status = 'teilweise'
+    end
+
+    local dueDate, dueTs, dueSource
+    dueSource = 'period_default'
+
+    if deadline and deadline.due_date then
+        dueDate = deadline.due_date
+        dueTs = FinanceUtils.parseDate(deadline.due_date)
+        dueSource = 'override'
+    else
+        local _, toDate = FinanceUtils.periodToRange(row.period)
+        dueDate, dueTs = FinanceUtils.dateAddDays(toDate, Config.DueDays)
+    end
+
+    local overdueDays = 0
+    if dueTs and os.time() > dueTs and status ~= 'bezahlt' then
+        overdueDays = FinanceUtils.daysBetween(os.time(), dueTs) or 0
     end
 
     return {
@@ -228,28 +150,365 @@ function FinanceAnalytics.computeBusinessTaxRow(row)
         is_paid = FinanceUtils.toBoolean(row.is_paid),
         paid_date = row.paid_date,
         restschuld = rest,
-        status = status
+        status = status,
+        due_date = dueDate,
+        due_source = dueSource,
+        overdue_days = overdueDays
     }
 end
 
-function FinanceAnalytics.computeBusinessProfile(row)
-    return parseBusinessData(row)
+function FinanceAnalytics.scoreReasons(score, reasons)
+    return {
+        score = math.min(Config.RiskEngine.scoreCap, math.max(0, FinanceUtils.round(score))),
+        band = FinanceUtils.riskBand(score),
+        reasons = reasons
+    }
 end
 
-function FinanceAnalytics.detectTransactionMatch(transaction, businessLookup)
-    local sender = (transaction.sender_identifier or ''):lower()
-    local receiver = (transaction.receiver_identifier or ''):lower()
+function FinanceAnalytics.computePrivateRisk(privateRows, reviewByTax)
+    local rules = Config.RiskEngine.rules
+    local w = Config.RiskEngine.weights
 
-    for job, _ in pairs(businessLookup) do
-        local jobLower = tostring(job):lower()
-        if sender:find(jobLower, 1, true) or receiver:find(jobLower, 1, true) then
-            return 'eindeutig', job
+    local openCases, overdueCases, warningStatuses = 0, 0, 0
+    local score, reasons = 0, {}
+
+    for _, row in ipairs(privateRows) do
+        if row.status ~= 'bezahlt' and row.status ~= 'storniert' then
+            openCases = openCases + 1
+        end
+
+        if row.status == 'ueberfaellig' then
+            overdueCases = overdueCases + 1
+        end
+
+        local review = reviewByTax[row.id]
+        if review and (review.status == 'mahnfall' or review.status == 'frist_ueberschritten' or review.status == 'auffaellig') then
+            warningStatuses = warningStatuses + 1
         end
     end
 
-    if sender ~= '' or receiver ~= '' then
-        return 'wahrscheinlich', sender ~= '' and sender or receiver
+    if openCases > 0 then
+        score = score + math.min(20, openCases * w.openCases)
+        reasons[#reasons + 1] = ('%s offene Privatforderungen'):format(openCases)
     end
 
-    return 'manuell_pruefen', nil
+    if overdueCases > 0 then
+        score = score + math.min(30, overdueCases * w.overdueCases)
+        reasons[#reasons + 1] = ('%s überfällige Forderungen'):format(overdueCases)
+    end
+
+    if warningStatuses > 0 then
+        score = score + math.min(20, warningStatuses * w.warningStatuses)
+        reasons[#reasons + 1] = ('%s Fälle mit Mahn-/Auffälligkeitsstatus'):format(warningStatuses)
+    end
+
+    if openCases >= rules.repeatedOpenPeriods then
+        score = score + 10
+        reasons[#reasons + 1] = ('%s offene Fälle in Folge'):format(openCases)
+    end
+
+    return FinanceAnalytics.scoreReasons(score, reasons)
+end
+
+local function txWindowMetrics(transactions)
+    local now = os.time()
+    local windows = {}
+    for _, days in ipairs(Config.RiskEngine.windowsDays) do
+        windows[days] = { incoming = 0, outgoing = 0, count = 0 }
+    end
+
+    for _, tx in ipairs(transactions) do
+        local ts = FinanceUtils.parseDate(tx.date)
+        if ts then
+            local age = FinanceUtils.daysBetween(now, ts) or 9999
+            for _, days in ipairs(Config.RiskEngine.windowsDays) do
+                if age <= days then
+                    windows[days].count = windows[days].count + 1
+                    if FinanceUtils.safeNumber(tx.value) >= 0 then
+                        windows[days].incoming = windows[days].incoming + FinanceUtils.safeNumber(tx.value)
+                    else
+                        windows[days].outgoing = windows[days].outgoing + math.abs(FinanceUtils.safeNumber(tx.value))
+                    end
+                end
+            end
+        end
+    end
+
+    return windows
+end
+
+function FinanceAnalytics.computeBusinessRisk(profile, businessTaxes, linkedTransactions, societyBalance, reviewRows)
+    local w = Config.RiskEngine.weights
+    local rules = Config.RiskEngine.rules
+
+    local openPeriods, partialPayments, delayedSum, lateFeeSum, restDebt = 0, 0, 0, 0, 0
+    local score, reasons = 0, {}
+
+    for _, period in ipairs(businessTaxes) do
+        if period.status ~= 'bezahlt' and period.restschuld > 0 then
+            openPeriods = openPeriods + 1
+            restDebt = restDebt + period.restschuld
+        end
+
+        if period.status == 'teilweise' then
+            partialPayments = partialPayments + 1
+        end
+
+        delayedSum = delayedSum + period.delayed_amount
+        lateFeeSum = lateFeeSum + period.late_fee_applied
+    end
+
+    if openPeriods > 0 then
+        score = score + math.min(25, openPeriods * w.repeatedOpenPeriods)
+        reasons[#reasons + 1] = ('%s offene Steuerperioden in Folge'):format(openPeriods)
+    end
+
+    if partialPayments > 0 then
+        score = score + math.min(18, partialPayments * w.partialPayments)
+        reasons[#reasons + 1] = ('%s Teilzahlungen statt Vollbegleichung'):format(partialPayments)
+    end
+
+    if delayedSum >= rules.delayedAmountHigh then
+        score = score + w.delayedAmount
+        reasons[#reasons + 1] = ('Hoher Verzugsbetrag: $%s'):format(FinanceUtils.formatMoney(delayedSum))
+    end
+
+    if lateFeeSum > 0 then
+        score = score + math.min(12, w.lateFees + FinanceUtils.round(lateFeeSum / 5000))
+        reasons[#reasons + 1] = ('Late-Fees aktiv: $%s'):format(FinanceUtils.formatMoney(lateFeeSum))
+    end
+
+    if societyBalance >= restDebt * rules.enoughBalanceFactor and restDebt > 0 then
+        score = score + w.enoughBalanceNoPay
+        reasons[#reasons + 1] = 'Kontostand ausreichend, aber Restschuld offen'
+    end
+
+    if societyBalance > 0 and restDebt / societyBalance >= rules.debtBalanceRatioHigh then
+        score = score + w.debtBalanceRatio
+        reasons[#reasons + 1] = ('Restschuld/Kontostand Verhältnis hoch (%.2f)'):format(restDebt / societyBalance)
+    end
+
+    if profile.totalEarned > 0 and restDebt / profile.totalEarned >= rules.debtEarnedRatioHigh then
+        score = score + w.debtEarnedRatio
+        reasons[#reasons + 1] = ('Restschuld/totalEarned Verhältnis hoch (%.2f)'):format(restDebt / profile.totalEarned)
+    end
+
+    local windows = txWindowMetrics(linkedTransactions)
+    local last7 = windows[7]
+    local last30 = windows[30]
+    if last7 and last30 and last30.incoming > 0 then
+        local extrapolated = last7.incoming * 4
+        if extrapolated > (last30.incoming * rules.unusualTxSpikeFactor) then
+            score = score + w.unusualTransactionSpike
+            reasons[#reasons + 1] = 'Ungewöhnlich hoher Zahlungseingangsanstieg (7d vs 30d)'
+        end
+    end
+
+    if last30 and last30.incoming >= rules.highIncomingMin and restDebt > 0 and (societyBalance + last30.incoming) > (restDebt * rules.highIncomingUnpaidFactor) then
+        score = score + w.incomingWithoutTaxSettlement
+        reasons[#reasons + 1] = 'Hohe Zahlungseingänge ohne erkennbare Steuerbegleichung'
+    end
+
+    local warningStatuses = 0
+    for _, r in ipairs(reviewRows or {}) do
+        if r.status == 'mahnfall' or r.status == 'auffaellig' or r.status == 'wartet_auf_zuordnung' then
+            warningStatuses = warningStatuses + 1
+        end
+    end
+
+    if warningStatuses > 0 then
+        score = score + math.min(15, warningStatuses * w.manualReviewQueue)
+        reasons[#reasons + 1] = ('%s manuelle Prüf-/Mahnmarker'):format(warningStatuses)
+    end
+
+    return FinanceAnalytics.scoreReasons(score, reasons), {
+        openPeriods = openPeriods,
+        partialPayments = partialPayments,
+        delayedSum = delayedSum,
+        lateFeeSum = lateFeeSum,
+        restDebt = restDebt,
+        txWindows = windows
+    }
+end
+
+function FinanceAnalytics.matchTransactionToBusiness(tx, job, businessId, societyRows, restDebt, fromDate, toDate)
+    local score = 0
+    local tokenSender = FinanceUtils.normalizeToken(tx.sender_identifier)
+    local tokenReceiver = FinanceUtils.normalizeToken(tx.receiver_identifier)
+    local tokenSenderName = FinanceUtils.normalizeToken(tx.sender_name)
+    local tokenReceiverName = FinanceUtils.normalizeToken(tx.receiver_name)
+    local tokenJob = FinanceUtils.normalizeToken(job)
+    local tokenBusiness = FinanceUtils.normalizeToken(businessId)
+
+    local function addIfMatch(token, amount)
+        if token ~= '' and (token == tokenSender or token == tokenReceiver or token == tokenSenderName or token == tokenReceiverName) then
+            score = score + amount
+            return true
+        end
+        return false
+    end
+
+    addIfMatch(tokenJob, 35)
+    addIfMatch(tokenBusiness, 30)
+
+    for _, society in ipairs(societyRows or {}) do
+        if addIfMatch(FinanceUtils.normalizeToken(society.society), 20) then break end
+        if addIfMatch(FinanceUtils.normalizeToken(society.society_name), 15) then break end
+    end
+
+    local absValue = math.abs(FinanceUtils.safeNumber(tx.value))
+    if restDebt > 0 then
+        local diffRatio = math.abs(absValue - restDebt) / restDebt
+        if diffRatio <= 0.15 then
+            score = score + 20
+        elseif diffRatio <= 0.35 then
+            score = score + 10
+        end
+    end
+
+    local txDate = FinanceUtils.parseDate(tx.date)
+    local fromTs = FinanceUtils.parseDate(fromDate)
+    local toTs = FinanceUtils.parseDate(toDate)
+    if txDate and fromTs and toTs then
+        if txDate >= fromTs and txDate <= toTs then
+            score = score + 15
+        elseif math.abs(txDate - toTs) <= 20 * 86400 then
+            score = score + 8
+        end
+    end
+
+    local quality = 'manuell_pruefen'
+    if score >= 70 then
+        quality = 'eindeutig'
+    elseif score >= 45 then
+        quality = 'wahrscheinlich'
+    end
+
+    return {
+        confidence = math.min(100, score),
+        quality = quality
+    }
+end
+
+function FinanceAnalytics.getDashboard()
+    local cached = FinanceDB.cache['dashboard:v2']
+    if cached and os.time() < cached.expiresAt then
+        return cached.value
+    end
+
+    local privateRows = MySQL.query.await('SELECT id, receiver, receiver_name, received_date, title, amount, is_paid, paid_date, canceled FROM taxes') or {}
+    local businessRows = MySQL.query.await('SELECT job, job_label, period, amount, paid_amount, delayed_amount, late_fee_applied, is_paid, paid_date FROM taxes_business ORDER BY period DESC') or {}
+    local societies = FinanceDB.fetchSocieties()
+    local tx90 = FinanceDB.fetchTransactionsByDateRange(os.date('%Y-%m-%d', os.time() - 90 * 86400), os.date('%Y-%m-%d'))
+
+    local reviewRows = MySQL.query.await('SELECT source_type, source_id, source_key, status FROM doj_finance_reviews') or {}
+    local reviewByTax = {}
+    for _, r in ipairs(reviewRows) do
+        if r.source_type == Config.RecordTypes.taxes then
+            reviewByTax[r.source_id] = r
+        end
+    end
+
+    local privateComputed = {}
+    for _, row in ipairs(privateRows) do
+        local deadline = FinanceDB.fetchDeadline(Config.RecordTypes.taxes, row.id, nil)
+        privateComputed[#privateComputed + 1] = FinanceAnalytics.computePrivateTaxRow(row, deadline)
+    end
+
+    local privateRisk = FinanceAnalytics.computePrivateRisk(privateComputed, reviewByTax)
+
+    local dbMaps, dbLookup = FinanceDB.fetchBusinessMaps()
+    local rawBusinesses, byId = getBusinessIndex()
+    local parsedBusinesses = {}
+    for _, b in ipairs(rawBusinesses) do
+        parsedBusinesses[b.id] = parseBusinessData(b)
+    end
+
+    local businessSummary = {}
+    local frequentDebtors, highRiskCases = {}, {}
+
+    for _, row in ipairs(businessRows) do
+        local computed = FinanceAnalytics.computeBusinessTaxRow(row, FinanceDB.fetchDeadline(Config.RecordTypes.taxes_business, nil, FinanceUtils.businessKey(row.job, row.period)))
+        local businessId = FinanceAnalytics.resolveBusinessIdForJob(row.job, dbLookup)
+        local businessRow = byId[FinanceUtils.normalizeToken(businessId)]
+        local profile = businessRow and parseBusinessData(businessRow) or {
+            id = businessId,
+            type = 'unbekannt',
+            owner = 'unbekannt',
+            balance = 0,
+            totalEarned = 0,
+            totalOrders = 0,
+            totalSales = 0
+        }
+
+        local key = FinanceUtils.normalizeToken(row.job)
+        businessSummary[key] = businessSummary[key] or {
+            job = row.job,
+            job_label = row.job_label,
+            business_id = profile.id,
+            profile = profile,
+            periods = {},
+            reviews = {}
+        }
+
+        businessSummary[key].periods[#businessSummary[key].periods + 1] = computed
+    end
+
+    local societiesByToken = {}
+    for _, s in ipairs(societies) do
+        societiesByToken[FinanceUtils.normalizeToken(s.society)] = FinanceUtils.safeNumber(s.value)
+        societiesByToken[FinanceUtils.normalizeToken(s.society_name)] = FinanceUtils.safeNumber(s.value)
+    end
+
+    for _, bundle in pairs(businessSummary) do
+        local societyBalance = societiesByToken[FinanceUtils.normalizeToken(bundle.job)] or societiesByToken[FinanceUtils.normalizeToken(bundle.business_id)] or 0
+        local relevantTx = {}
+        for _, tx in ipairs(tx90) do
+            local match = FinanceAnalytics.matchTransactionToBusiness(tx, bundle.job, bundle.business_id, societies, 0, nil, nil)
+            if match.confidence >= 35 then
+                relevantTx[#relevantTx + 1] = tx
+            end
+        end
+
+        local businessReviews = MySQL.query.await('SELECT status FROM doj_finance_reviews WHERE source_type = ? AND (source_key LIKE ? OR source_key LIKE ?)', {
+            Config.RecordTypes.taxes_business,
+            bundle.job .. '|%',
+            FinanceUtils.normalizeToken(bundle.business_id) .. '|%'
+        }) or {}
+
+        local risk, meta = FinanceAnalytics.computeBusinessRisk(bundle.profile, bundle.periods, relevantTx, societyBalance, businessReviews)
+        bundle.risk = risk
+        bundle.meta = meta
+        bundle.society_balance = societyBalance
+
+        if meta.openPeriods >= 2 then
+            frequentDebtors[#frequentDebtors + 1] = bundle
+        end
+
+        if risk.score >= Config.RiskEngine.thresholds.high then
+            highRiskCases[#highRiskCases + 1] = bundle
+        end
+    end
+
+    table.sort(frequentDebtors, function(a, b) return (a.meta.restDebt or 0) > (b.meta.restDebt or 0) end)
+    table.sort(highRiskCases, function(a, b) return (a.risk.score or 0) > (b.risk.score or 0) end)
+
+    local result = {
+        private = {
+            risk = privateRisk,
+            openCount = #privateComputed
+        },
+        business = {
+            total = #businessRows,
+            mappedBusinesses = #dbMaps,
+            debtorCount = #frequentDebtors,
+            highRiskCount = #highRiskCases
+        },
+        frequentDebtors = frequentDebtors,
+        highRiskCases = highRiskCases,
+        txWindows = txWindowMetrics(tx90)
+    }
+
+    FinanceDB.cache['dashboard:v2'] = { value = result, expiresAt = os.time() + Config.CacheTtlSeconds }
+    return result
 end

@@ -1,4 +1,4 @@
--- DOJ Finance Suite: Nur Hilfstabellen (bestehende SoT-Tabellen werden NICHT erstellt/verändert)
+-- DOJ Finance Suite: Hilfstabellen für Workflow, Mapping, Fristen, Verknüpfungen und Reports
 
 CREATE TABLE IF NOT EXISTS `doj_finance_reviews` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS `doj_finance_reports` (
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_report_type` (`report_type`),
+  KEY `idx_created_by` (`created_by`),
   KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -112,4 +113,18 @@ CREATE TABLE IF NOT EXISTS `doj_finance_links` (
   KEY `idx_business_job_period` (`business_job`, `period`),
   KEY `idx_transaction_id` (`transaction_id`),
   KEY `idx_tax_source` (`tax_source_type`, `tax_source_id`, `tax_source_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_business_map` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `tax_job` VARCHAR(64) NOT NULL,
+  `business_id` VARCHAR(64) NOT NULL,
+  `alias` VARCHAR(64) NULL,
+  `created_by` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_tax_job` (`tax_job`),
+  KEY `idx_business_id` (`business_id`),
+  KEY `idx_alias` (`alias`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

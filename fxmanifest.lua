@@ -4,8 +4,8 @@ lua54 'yes'
 
 name 'doj_finance_suite'
 author 'Codex'
-description 'DOJ Finanzamt-/Controlling-Backoffice für ESX auf Basis bestehender Steuer- und Banking-Tabellen'
-version '1.0.0'
+description 'DOJ Finanzsoftware / Backoffice für ESX basierend auf bestehenden Steuer- und Bankingdaten'
+version '1.1.0'
 
 shared_scripts {
     '@ox_lib/init.lua',

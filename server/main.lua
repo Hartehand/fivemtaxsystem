@@ -1,15 +1,16 @@
-local ESX = exports['es_extended']:getSharedObject()
+local ESX = FinanceCore.getESX()
+
+local function getPlayer(source)
+    ESX = ESX or FinanceCore.getESX()
+    return ESX and ESX.GetPlayerFromId and ESX.GetPlayerFromId(source) or nil
+end
 
 local function hasAccess(source)
-    local xPlayer = ESX.GetPlayerFromId(source)
-    if not xPlayer then
-        return false
-    end
+    local xPlayer = getPlayer(source)
+    if not xPlayer then return false end
 
     local group = xPlayer.getGroup and xPlayer.getGroup() or 'user'
-    if Config.AllowedGroups[group] then
-        return true
-    end
+    if Config.AllowedGroups[group] then return true end
 
     local job = xPlayer.getJob and xPlayer.getJob()
     return job and Config.AllowedJobs[job.name] == true
@@ -21,13 +22,12 @@ local function assertAccess(source)
     end
 end
 
-local function buildBusinessLookup()
-    local rows = MySQL.query.await('SELECT DISTINCT job FROM taxes_business') or {}
-    local map = {}
-    for _, row in ipairs(rows) do
-        map[row.job] = true
-    end
-    return map
+local function notify(source, msg, msgType)
+    TriggerClientEvent('ox_lib:notify', source, {
+        title = 'DOJ Finance Suite',
+        description = msg,
+        type = msgType or 'inform'
+    })
 end
 
 lib.callback.register('doj_finance_suite:server:getDashboard', function(source)
@@ -37,75 +37,196 @@ end)
 
 lib.callback.register('doj_finance_suite:server:getPrivateTaxes', function(source, filters, page, pageSize)
     assertAccess(source)
-    local rows, count = FinanceDB.fetchPrivateTaxes(filters or {}, page, pageSize)
-    local list = {}
+    local rows, count = FinanceDB.fetchPrivateTaxes(filters, page, pageSize)
+    local out = {}
     for _, row in ipairs(rows) do
-        list[#list + 1] = FinanceAnalytics.computePrivateTaxRow(row)
+        local deadline = FinanceDB.fetchDeadline(Config.RecordTypes.taxes, row.id, nil)
+        out[#out + 1] = FinanceAnalytics.computePrivateTaxRow(row, deadline)
     end
-
-    return { rows = list, count = count }
+    return { rows = out, count = count }
 end)
 
 lib.callback.register('doj_finance_suite:server:getBusinessTaxes', function(source, filters, page, pageSize)
     assertAccess(source)
-    local rows, count = FinanceDB.fetchBusinessTaxes(filters or {}, page, pageSize)
-    local list = {}
+    local rows, count = FinanceDB.fetchBusinessTaxes(filters, page, pageSize)
+    local _, lookup = FinanceDB.fetchBusinessMaps()
+    local out = {}
     for _, row in ipairs(rows) do
-        list[#list + 1] = FinanceAnalytics.computeBusinessTaxRow(row)
+        local sourceKey = FinanceUtils.businessKey(row.job, row.period)
+        local deadline = FinanceDB.fetchDeadline(Config.RecordTypes.taxes_business, nil, sourceKey)
+        local computed = FinanceAnalytics.computeBusinessTaxRow(row, deadline)
+        local businessId, matchedBy = FinanceAnalytics.resolveBusinessIdForJob(row.job, lookup)
+        computed.business_id = businessId
+        computed.business_match_mode = matchedBy
+        out[#out + 1] = computed
     end
-    return { rows = list, count = count }
+
+    return { rows = out, count = count }
 end)
 
 lib.callback.register('doj_finance_suite:server:getBusinesses', function(source, page, pageSize)
     assertAccess(source)
     local rows, count = FinanceDB.fetchBusinessProfiles(page, pageSize)
-    local output = {}
+    local out = {}
     for _, row in ipairs(rows) do
-        output[#output + 1] = FinanceAnalytics.computeBusinessProfile(row)
+        out[#out + 1] = {
+            id = row.id,
+            type = row.type,
+            owner = row.owner,
+            employees = row.employees,
+            data = FinanceUtils.safeDecode(row.data)
+        }
     end
 
-    return { rows = output, count = count }
+    return { rows = out, count = count }
 end)
 
-lib.callback.register('doj_finance_suite:server:getSocieties', function(source)
+lib.callback.register('doj_finance_suite:server:getBusinessProfile', function(source, businessId)
     assertAccess(source)
-    return FinanceDB.fetchSocieties()
-end)
+    local business = FinanceDB.fetchBusinessById(businessId)
+    if not business then return nil end
 
-lib.callback.register('doj_finance_suite:server:getTransactions', function(source, filters, page, pageSize)
-    assertAccess(source)
-    local rows, count = FinanceDB.fetchTransactions(filters or {}, page, pageSize)
-    local lookup = buildBusinessLookup()
+    local parsedData = FinanceUtils.safeDecode(business.data)
+    local taxRows = MySQL.query.await('SELECT job, job_label, period, amount, paid_amount, delayed_amount, late_fee_applied, is_paid, paid_date FROM taxes_business WHERE lower(job) = lower(?) ORDER BY period DESC', {
+        businessId
+    }) or {}
 
-    for _, tx in ipairs(rows) do
-        local quality, matched = FinanceAnalytics.detectTransactionMatch(tx, lookup)
-        tx.match_quality = quality
-        tx.match_job = matched
+    if #taxRows == 0 then
+        taxRows = MySQL.query.await('SELECT job, job_label, period, amount, paid_amount, delayed_amount, late_fee_applied, is_paid, paid_date FROM taxes_business ORDER BY period DESC LIMIT 250') or {}
     end
 
-    return { rows = rows, count = count }
+    local computedTaxes = {}
+    for _, t in ipairs(taxRows) do
+        local key = FinanceUtils.businessKey(t.job, t.period)
+        computedTaxes[#computedTaxes + 1] = FinanceAnalytics.computeBusinessTaxRow(t, FinanceDB.fetchDeadline(Config.RecordTypes.taxes_business, nil, key))
+    end
+
+    local tx = FinanceDB.fetchTransactionsByDateRange(os.date('%Y-%m-%d', os.time() - 90 * 86400), os.date('%Y-%m-%d'))
+    local societyRows = FinanceDB.fetchSocieties()
+    local relevant = {}
+    for _, entry in ipairs(tx) do
+        local m = FinanceAnalytics.matchTransactionToBusiness(entry, businessId, businessId, societyRows, 0, nil, nil)
+        if m.confidence >= 40 then
+            entry.match = m
+            relevant[#relevant + 1] = entry
+        end
+    end
+
+    local reviewRows = MySQL.query.await('SELECT status FROM doj_finance_reviews WHERE source_type = ? AND source_key LIKE ?', {
+        Config.RecordTypes.taxes_business,
+        businessId .. '|%'
+    }) or {}
+
+    local risk, meta = FinanceAnalytics.computeBusinessRisk({
+        id = business.id,
+        type = business.type,
+        owner = business.owner,
+        balance = FinanceUtils.safeNumber(parsedData.balance),
+        totalEarned = FinanceUtils.safeNumber(parsedData.totalEarned)
+    }, computedTaxes, relevant, FinanceUtils.safeNumber(parsedData.balance), reviewRows)
+
+    return {
+        business = business,
+        parsed = parsedData,
+        taxPeriods = computedTaxes,
+        transactions = relevant,
+        risk = risk,
+        risk_meta = meta,
+        case_bundle = FinanceReviews.getCaseBundle(Config.RecordTypes.business, business.id, nil)
+    }
 end)
 
-lib.callback.register('doj_finance_suite:server:getReview', function(source, sourceType, sourceId, sourceKey)
+lib.callback.register('doj_finance_suite:server:getCaseDetail', function(source, sourceType, sourceId, sourceKey)
     assertAccess(source)
-    return FinanceReviews.getReviewBundle(sourceType, sourceId, sourceKey)
+    local data = nil
+
+    if sourceType == Config.RecordTypes.taxes then
+        local row = FinanceDB.fetchSinglePrivateTax(sourceId)
+        if not row then return nil end
+        data = FinanceAnalytics.computePrivateTaxRow(row, FinanceDB.fetchDeadline(sourceType, sourceId, sourceKey))
+    elseif sourceType == Config.RecordTypes.taxes_business then
+        local job, period = sourceKey:match('^(.-)|(.+)$')
+        local row = FinanceDB.fetchSingleBusinessTax(job, period)
+        if not row then return nil end
+        data = FinanceAnalytics.computeBusinessTaxRow(row, FinanceDB.fetchDeadline(sourceType, sourceId, sourceKey))
+
+        local _, lookup = FinanceDB.fetchBusinessMaps()
+        local businessId = FinanceAnalytics.resolveBusinessIdForJob(job, lookup)
+        local suggestions = {}
+        local fromDate, toDate = FinanceUtils.periodToRange(period)
+        for _, tx in ipairs(FinanceDB.fetchPotentialTransactions(job, period)) do
+            local match = FinanceAnalytics.matchTransactionToBusiness(tx, job, businessId, FinanceDB.fetchSocieties(), data.restschuld, fromDate, toDate)
+            tx.match = match
+            if match.confidence >= 35 then
+                suggestions[#suggestions + 1] = tx
+            end
+        end
+        data.suggestions = suggestions
+        data.business_id = businessId
+    elseif sourceType == Config.RecordTypes.business then
+        data = FinanceDB.fetchBusinessById(sourceId)
+    end
+
+    return {
+        source_type = sourceType,
+        source_id = sourceId,
+        source_key = sourceKey,
+        record = data,
+        bundle = FinanceReviews.getCaseBundle(sourceType, sourceId, sourceKey)
+    }
 end)
 
 lib.callback.register('doj_finance_suite:server:setReviewStatus', function(source, payload)
     assertAccess(source)
-    local xPlayer = ESX.GetPlayerFromId(source)
-    return FinanceReviews.setStatus(xPlayer, payload)
+    return FinanceReviews.setStatus(source, payload)
 end)
 
 lib.callback.register('doj_finance_suite:server:addReviewNote', function(source, payload)
     assertAccess(source)
-    local xPlayer = ESX.GetPlayerFromId(source)
-    return FinanceReviews.addNote(xPlayer, payload)
+    return FinanceReviews.addNote(source, payload)
 end)
 
-lib.callback.register('doj_finance_suite:server:listReports', function(source)
+lib.callback.register('doj_finance_suite:server:setDeadline', function(source, payload)
     assertAccess(source)
-    return FinanceReports.listReports(50)
+    return FinanceReviews.setDeadline(source, payload)
+end)
+
+lib.callback.register('doj_finance_suite:server:removeDeadline', function(source, payload)
+    assertAccess(source)
+    return FinanceReviews.removeDeadline(source, payload)
+end)
+
+lib.callback.register('doj_finance_suite:server:addLink', function(source, payload)
+    assertAccess(source)
+    return FinanceReviews.addLink(source, payload)
+end)
+
+lib.callback.register('doj_finance_suite:server:removeLink', function(source, payload)
+    assertAccess(source)
+    return FinanceReviews.removeLink(source, payload)
+end)
+
+lib.callback.register('doj_finance_suite:server:upsertBusinessMap', function(source, payload)
+    assertAccess(source)
+    FinanceDB.upsertBusinessMap(payload.tax_job, payload.business_id, payload.alias, getPlayer(source).getIdentifier())
+    return true
+end)
+
+lib.callback.register('doj_finance_suite:server:getBusinessMaps', function(source)
+    assertAccess(source)
+    local rows = FinanceDB.fetchBusinessMaps()
+    return rows
+end)
+
+lib.callback.register('doj_finance_suite:server:getTransactions', function(source, filters, page, pageSize)
+    assertAccess(source)
+    local rows, count = FinanceDB.fetchTransactions(filters, page, pageSize)
+    return { rows = rows, count = count }
+end)
+
+lib.callback.register('doj_finance_suite:server:listReports', function(source, filters)
+    assertAccess(source)
+    return FinanceReports.listReports(filters)
 end)
 
 lib.callback.register('doj_finance_suite:server:getReport', function(source, reportId)
@@ -115,93 +236,47 @@ end)
 
 lib.callback.register('doj_finance_suite:server:createReport', function(source, reportType, payload)
     assertAccess(source)
-    local xPlayer = ESX.GetPlayerFromId(source)
-
-    if reportType == 'schuldnerreport' then
-        return FinanceReports.generateDebtorReport(xPlayer)
-    elseif reportType == 'periodenreport' then
-        return FinanceReports.generateBusinessPeriodReport(xPlayer, payload and payload.period or os.date('%Y-%m'))
-    end
-
-    return nil
+    return FinanceReports.generate(source, reportType, payload)
 end)
 
 local function openFinance(source)
     if not hasAccess(source) then
-        TriggerClientEvent('ox_lib:notify', source, {
-            title = 'DOJ Finance Suite',
-            description = 'Du bist nicht berechtigt.',
-            type = 'error'
-        })
-        return
+        return notify(source, 'Du bist nicht berechtigt.', 'error')
     end
 
     TriggerClientEvent('doj_finance_suite:client:open', source)
 end
 
 RegisterCommand(Config.Commands.finance, function(source)
-    if source == 0 then
-        print('Dieser Command ist nur Ingame verfügbar.')
-        return
-    end
-
-    openFinance(source)
+    if source > 0 then openFinance(source) end
 end, false)
 
 RegisterCommand(Config.Commands.taxoffice, function(source)
-    if source == 0 then
-        print('Dieser Command ist nur Ingame verfügbar.')
-        return
-    end
-
-    openFinance(source)
+    if source > 0 then openFinance(source) end
 end, false)
 
 RegisterCommand(Config.Commands.report, function(source, args)
-    if source == 0 then
-        print('Dieser Command ist nur Ingame verfügbar.')
-        return
-    end
-
-    if not hasAccess(source) then
-        return
-    end
+    if source == 0 then return end
+    if not hasAccess(source) then return end
 
     local reportType = args[1] or 'schuldnerreport'
     local payload = {}
-    if reportType == 'periodenreport' then
-        payload.period = args[2] or os.date('%Y-%m')
+    if reportType == 'business_fall' then
+        payload.job = args[2]
+        payload.period = args[3]
+    elseif reportType == 'privat_fall' then
+        payload.tax_id = tonumber(args[2])
+    elseif reportType == 'zahlungsreport' then
+        payload.from = args[2]
+        payload.to = args[3]
     end
 
-    local xPlayer = ESX.GetPlayerFromId(source)
-    local id = nil
-    if reportType == 'periodenreport' then
-        id = FinanceReports.generateBusinessPeriodReport(xPlayer, payload.period)
-    else
-        id = FinanceReports.generateDebtorReport(xPlayer)
-    end
-
-    TriggerClientEvent('ox_lib:notify', source, {
-        title = 'DOJ Finance Suite',
-        description = ('Report erstellt (ID: %s)'):format(id),
-        type = 'success'
-    })
+    local id = FinanceReports.generate(source, reportType, payload)
+    if id then notify(source, ('Report erstellt: %s'):format(id), 'success') else notify(source, 'Report konnte nicht erstellt werden.', 'error') end
 end, false)
 
 RegisterCommand(Config.Commands.debugRefresh, function(source)
-    if source ~= 0 and not hasAccess(source) then
-        return
-    end
-
+    if source > 0 and not hasAccess(source) then return end
     FinanceDB.invalidateCache()
-
-    if source ~= 0 then
-        TriggerClientEvent('ox_lib:notify', source, {
-            title = 'DOJ Finance Suite',
-            description = 'Cache wurde geleert.',
-            type = 'inform'
-        })
-    else
-        print('[doj_finance_suite] Cache refreshed.')
-    end
+    if source > 0 then notify(source, 'Cache geleert.', 'inform') else print('[doj_finance_suite] cache refresh done') end
 end, true)
