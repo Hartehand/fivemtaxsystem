@@ -1,65 +1,89 @@
 local resourceName = GetCurrentResourceName()
 local isOpen = false
 local spawnedNpc
-local uiReady = false
-local openRequested = false
+
+local DEBUG = GetConvarInt('doj_finance_debug', 1) == 1
+
+local function dprint(msg)
+    if DEBUG then
+        print(('[doj_finance_suite][client] %s'):format(msg))
+    end
+end
 
 local function notify(message, msgType)
     lib.notify({ title = 'DOJ Finance Suite', description = message, type = msgType or 'inform' })
 end
 
-local function openTablet()
-    if isOpen then return end
-    openRequested = true
-    SetNuiFocus(true, true)
-    SetNuiFocusKeepInput(false)
+local function sendOpenMessages()
+    local payload = {
+        action = 'open',
+        opened_at = os.time(),
+        source = 'client_open'
+    }
 
-    if uiReady then
-        isOpen = true
-        SendNUIMessage({ action = 'open' })
-    else
-        CreateThread(function()
-            local tries = 0
-            while openRequested and not uiReady and tries < 40 do
-                tries = tries + 1
-                Wait(100)
-            end
+    dprint('SendNUIMessage open (initial)')
+    SendNUIMessage(payload)
 
-            if openRequested and uiReady then
-                isOpen = true
-                SendNUIMessage({ action = 'open' })
-            elseif openRequested then
-                SetNuiFocus(false, false)
-                openRequested = false
-                notify('Tablet UI konnte nicht geladen werden (NUI nicht bereit).', 'error')
-            end
-        end)
-    end
+    CreateThread(function()
+        Wait(50)
+        dprint('SendNUIMessage open (retry #1)')
+        SendNUIMessage(payload)
+
+        Wait(150)
+        dprint('SendNUIMessage hydrate (retry #2)')
+        SendNUIMessage({
+            action = 'hydrate',
+            payload = {
+                opened_at = os.time(),
+                reason = 'retry_hydrate'
+            }
+        })
+    end)
 end
 
-local function closeTablet()
-    if not isOpen and not openRequested then return end
+local function openTablet(reason)
+    if isOpen then
+        dprint('openTablet skipped (already open)')
+        return
+    end
+
+    dprint(('openTablet called (reason=%s)'):format(reason or 'unknown'))
+    isOpen = true
+
+    SetNuiFocus(true, true)
+    SetNuiFocusKeepInput(false)
+    dprint('SetNuiFocus(true, true) done')
+
+    sendOpenMessages()
+end
+
+local function closeTablet(reason)
+    if not isOpen then
+        dprint('closeTablet skipped (already closed)')
+        return
+    end
+
+    dprint(('closeTablet called (reason=%s)'):format(reason or 'unknown'))
     isOpen = false
-    openRequested = false
+
     SetNuiFocus(false, false)
     SendNUIMessage({ action = 'close' })
+    dprint('SetNuiFocus(false, false) + SendNUIMessage(close) done')
 end
 
 RegisterNetEvent('doj_finance_suite:client:open', function()
-    openTablet()
+    dprint('Received event doj_finance_suite:client:open')
+    openTablet('server_event')
 end)
 
 RegisterNUICallback('close', function(_, cb)
-    closeTablet()
+    dprint('NUI callback close received')
+    closeTablet('nui_close')
     cb({ ok = true })
 end)
 
 RegisterNUICallback('uiReady', function(_, cb)
-    uiReady = true
-    if openRequested and not isOpen then
-        isOpen = true
-        SendNUIMessage({ action = 'open' })
-    end
+    dprint('NUI callback uiReady received')
     cb({ ok = true })
 end)
 
@@ -188,6 +212,7 @@ local function setupInteraction()
                     if dist <= Config.Interaction.point.radius then
                         lib.showTextUI(Config.Interaction.point.textUI)
                         if IsControlJustReleased(0, 38) then
+                            dprint('Interaction point triggered finance command')
                             ExecuteCommand(Config.Commands.finance)
                         end
                     else
@@ -207,7 +232,8 @@ end
 CreateThread(function()
     while true do
         if IsControlJustReleased(0, 322) and isOpen then -- ESC
-            closeTablet()
+            dprint('ESC pressed while tablet open')
+            closeTablet('esc_key')
         end
         Wait(0)
     end
@@ -215,12 +241,13 @@ end)
 
 AddEventHandler('onResourceStart', function(name)
     if name ~= resourceName then return end
+    dprint('Resource started, setup interaction')
     setupInteraction()
 end)
 
 AddEventHandler('onResourceStop', function(name)
     if name ~= resourceName then return end
-    closeTablet()
+    closeTablet('resource_stop')
     lib.hideTextUI()
     if spawnedNpc and DoesEntityExist(spawnedNpc) then
         DeleteEntity(spawnedNpc)
@@ -228,5 +255,6 @@ AddEventHandler('onResourceStop', function(name)
 end)
 
 RegisterCommand('finance_close', function()
-    closeTablet()
+    dprint('finance_close command executed')
+    closeTablet('finance_close_command')
 end, false)

@@ -202,3 +202,5 @@ Beispiele:
 - Keine harte Abhängigkeit auf unbekannte Users-Tabellen.
 - Name-Resolver nutzt bestehende Felder + optional Online-ESX + optional Adapter.
 - Performance: Pagination, Caching, serverseitige Berechnung.
+- NUI-Öffnung ist **nicht** von `uiReady` blockiert; `uiReady` wird nur optional für Diagnose/Sync genutzt.
+- Debug-Logs können über `setr doj_finance_debug 1` in `server.cfg` aktiviert/erzwungen werden.

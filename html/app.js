@@ -193,14 +193,26 @@ tabs.forEach(function(tab) {
 window.addEventListener('message', function(event) {
   var msg = event.data || {};
   if (msg.action === 'open') {
+    console.log('[doj_finance_suite][nui] open message received', msg);
     app.classList.remove('hidden');
     setTab('dashboard');
   }
+  if (msg.action === 'hydrate') {
+    console.log('[doj_finance_suite][nui] hydrate message received', msg);
+  }
   if (msg.action === 'close') {
+    console.log('[doj_finance_suite][nui] close message received');
     app.classList.add('hidden');
   }
 });
 
 window.addEventListener('load', function() {
+  console.log('[doj_finance_suite][nui] window loaded, sending uiReady');
   post('uiReady', {}).catch(function() {});
+});
+
+window.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    post('close', {}).catch(function() {});
+  }
 });

@@ -1,4 +1,11 @@
 local ESX = FinanceCore.getESX()
+local DEBUG = GetConvarInt('doj_finance_debug', 1) == 1
+
+local function dprint(msg)
+    if DEBUG then
+        print(('[doj_finance_suite][server] %s'):format(msg))
+    end
+end
 
 local function getPlayer(source)
     ESX = ESX or FinanceCore.getESX()
@@ -247,18 +254,22 @@ lib.callback.register('doj_finance_suite:server:createReport', function(source, 
 end)
 
 local function openFinance(source)
+    dprint(('openFinance requested by source %s'):format(source))
     if not hasAccess(source) then
         return notify(source, 'Du bist nicht berechtigt.', 'error')
     end
 
     TriggerClientEvent('doj_finance_suite:client:open', source)
+    dprint(('open event sent to source %s'):format(source))
 end
 
 RegisterCommand(Config.Commands.finance, function(source)
+    dprint(('command /%s by source %s'):format(Config.Commands.finance, source))
     if source > 0 then openFinance(source) end
 end, false)
 
 RegisterCommand(Config.Commands.taxoffice, function(source)
+    dprint(('command /%s by source %s'):format(Config.Commands.taxoffice, source))
     if source > 0 then openFinance(source) end
 end, false)
 
