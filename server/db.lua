@@ -75,13 +75,13 @@ function FinanceDB.fetchPrivateTaxes(filters, page, pageSize)
 
     params[#params + 1] = limit
     params[#params + 1] = offset
-    local rows = MySQL.query.await([[
+    local rows = MySQL.query.await(([[
         SELECT id, receiver, receiver_name, received_date, title, amount, is_paid, paid_date, canceled
         FROM taxes
         WHERE %s
         ORDER BY received_date DESC, id DESC
         LIMIT ? OFFSET ?
-    ]]:format(where), params) or {}
+    ]]):format(where), params) or {}
 
     return rows, count
 end
@@ -109,13 +109,13 @@ function FinanceDB.fetchBusinessTaxes(filters, page, pageSize)
 
     params[#params + 1] = limit
     params[#params + 1] = offset
-    local rows = MySQL.query.await([[
+    local rows = MySQL.query.await(([[
         SELECT job, job_label, period, amount, paid_amount, delayed_amount, late_fee_applied, is_paid, paid_date
         FROM taxes_business
         WHERE %s
         ORDER BY period DESC, job ASC
         LIMIT ? OFFSET ?
-    ]]:format(where), params) or {}
+    ]]):format(where), params) or {}
 
     return rows, count
 end
@@ -153,13 +153,13 @@ function FinanceDB.fetchTransactions(filters, page, pageSize)
     end
 
     local where = table.concat(clauses, ' AND ')
-    local seedRows = MySQL.query.await([[
+    local seedRows = MySQL.query.await(([[
         SELECT id, receiver_identifier, receiver_name, sender_identifier, sender_name, date, value, type
         FROM okokbanking_transactions
         WHERE %s
         ORDER BY date DESC, id DESC
         LIMIT 2000
-    ]]:format(where), params) or {}
+    ]]):format(where), params) or {}
 
     local fromTs = FinanceUtils.parseDate(filters.from)
     local toTs = FinanceUtils.parseDate(filters.to)
