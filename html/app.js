@@ -1,188 +1,197 @@
 const app = document.getElementById('app');
 const content = document.getElementById('content');
-const tabs = Array.from(document.querySelectorAll('.tabs button'));
+const tabs = Array.prototype.slice.call(document.querySelectorAll('.tabs button'));
 const closeBtn = document.getElementById('closeBtn');
 
-let state = { tab: 'dashboard' };
+var state = { tab: 'dashboard' };
 
-const post = async (action, data = {}) => {
-  const res = await fetch(`https://${GetParentResourceName()}/${action}`, {
+function safe(v, d) { return (v === undefined || v === null) ? d : v; }
+
+async function post(action, data) {
+  const res = await fetch('https://' + GetParentResourceName() + '/' + action, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
+    body: JSON.stringify(data || {})
   });
   return res.json();
-};
+}
 
-const setTab = (tab) => {
+function setTab(tab) {
   state.tab = tab;
-  tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  tabs.forEach(function(t) { t.classList.toggle('active', t.dataset.tab === tab); });
   render();
-};
+}
 
-const badge = (band) => `<span class="badge ${band || 'unauffaellig'}">${band || 'unauffaellig'}</span>`;
+function badge(band) {
+  var b = band || 'unauffaellig';
+  return '<span class="badge ' + b + '">' + b + '</span>';
+}
 
-const renderDashboard = async () => {
-  const data = await post('getDashboard');
-  content.innerHTML = `
-    <div class="grid">
-      <div class="card"><h3>Privatrisiko</h3><div class="val">${data.private?.risk?.score ?? 0}</div>${badge(data.private?.risk?.band)}</div>
-      <div class="card"><h3>Business Hochrisiko</h3><div class="val">${data.business?.highRiskCount ?? 0}</div></div>
-      <div class="card"><h3>Häufige Schuldner</h3><div class="val">${data.business?.debtorCount ?? 0}</div></div>
-      <div class="card"><h3>Business-Fälle</h3><div class="val">${data.business?.total ?? 0}</div></div>
-    </div>
-    <div class="detail-panel">${(data.private?.risk?.reasons || []).join('\n') || 'Keine besonderen Hinweise'}</div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Unternehmen</th><th>Score</th><th>Band</th><th>Restschuld</th><th>Gründe</th></tr></thead>
-        <tbody>
-          ${(data.highRiskCases || []).map(r => `<tr><td>${r.job_label || r.job}</td><td>${r.risk?.score ?? 0}</td><td>${badge(r.risk?.band)}</td><td>$${(r.meta?.restDebt || 0).toFixed(2)}</td><td>${(r.risk?.reasons || []).join(', ')}</td></tr>`).join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
-};
+async function renderDashboard() {
+  var data = await post('getDashboard');
+  var highRisk = data.highRiskCases || [];
+  var privateRisk = data.private && data.private.risk ? data.private.risk : { score: 0, band: 'unauffaellig', reasons: [] };
 
-const renderPrivate = async () => {
-  const data = await post('getPrivateCases', { page: 1, pageSize: 50, filters: {} });
-  content.innerHTML = `
-    <div class="small">Gesamt: ${data.count || 0}</div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Betrag</th><th>Due</th><th>Aktion</th></tr></thead>
-      <tbody>
-        ${(data.rows || []).map(r => `<tr>
-          <td>${r.id}</td><td>${r.receiver_name || r.receiver}</td><td>${r.status}</td><td>$${(+r.amount).toFixed(2)}</td><td>${r.due_date || '-'}</td>
-          <td><button data-detail='${JSON.stringify({ source_type: 'taxes', source_id: r.id })}'>Akte</button></td>
-        </tr>`).join('')}
-      </tbody></table></div>
-    <div id="detail" class="detail-panel small">Wähle einen Fall.</div>
-  `;
+  content.innerHTML = '' +
+    '<div class="grid">' +
+      '<div class="card"><h3>Privatrisiko</h3><div class="val">' + safe(privateRisk.score, 0) + '</div>' + badge(privateRisk.band) + '</div>' +
+      '<div class="card"><h3>Business Hochrisiko</h3><div class="val">' + safe(data.business && data.business.highRiskCount, 0) + '</div></div>' +
+      '<div class="card"><h3>Häufige Schuldner</h3><div class="val">' + safe(data.business && data.business.debtorCount, 0) + '</div></div>' +
+      '<div class="card"><h3>Business-Fälle</h3><div class="val">' + safe(data.business && data.business.total, 0) + '</div></div>' +
+    '</div>' +
+    '<div class="detail-panel">' + ((privateRisk.reasons || []).join('\n') || 'Keine besonderen Hinweise') + '</div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Unternehmen</th><th>Score</th><th>Band</th><th>Restschuld</th><th>Gründe</th></tr></thead><tbody>' +
+      highRisk.map(function(r) {
+        var meta = r.meta || {};
+        var risk = r.risk || {};
+        return '<tr><td>' + (r.job_label || r.job || '-') + '</td><td>' + safe(risk.score, 0) + '</td><td>' + badge(risk.band) + '</td><td>$' + Number(safe(meta.restDebt, 0)).toFixed(2) + '</td><td>' + (risk.reasons || []).join(', ') + '</td></tr>';
+      }).join('') +
+    '</tbody></table></div>';
+}
+
+async function renderPrivate() {
+  var data = await post('getPrivateCases', { page: 1, pageSize: 50, filters: {} });
+  var rows = data.rows || [];
+
+  content.innerHTML = '<div class="small">Gesamt: ' + safe(data.count, 0) + '</div>' +
+    '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Betrag</th><th>Due</th><th>Aktion</th></tr></thead><tbody>' +
+    rows.map(function(r) {
+      return '<tr><td>' + r.id + '</td><td>' + (r.receiver_name || r.receiver || '-') + '</td><td>' + (r.status || '-') + '</td><td>$' + Number(safe(r.amount,0)).toFixed(2) + '</td><td>' + (r.due_date || '-') + '</td><td><button data-detail="' + encodeURIComponent(JSON.stringify({ source_type: 'taxes', source_id: r.id })) + '">Akte</button></td></tr>';
+    }).join('') +
+    '</tbody></table></div><div id="detail" class="detail-panel small">Wähle einen Fall.</div>';
+
   bindDetailButtons();
-};
+}
 
-const renderBusiness = async () => {
-  const data = await post('getBusinessCases', { page: 1, pageSize: 50, filters: {} });
-  content.innerHTML = `
-    <div class="small">Gesamt: ${data.count || 0}</div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Job</th><th>Periode</th><th>Firma</th><th>Status</th><th>Restschuld</th><th>Aktion</th></tr></thead>
-      <tbody>
-        ${(data.rows || []).map(r => {
-          const sourceKey = `${r.job}|${r.period}`;
-          return `<tr>
-          <td>${r.job_label || r.job}</td><td>${r.period}</td><td>${r.business_id || '-'}</td><td>${r.status}</td><td>$${(+r.restschuld).toFixed(2)}</td>
-          <td><button data-detail='${JSON.stringify({ source_type: 'taxes_business', source_key: sourceKey })}'>Akte</button></td>
-        </tr>`
-        }).join('')}
-      </tbody></table></div>
-    <div id="detail" class="detail-panel small">Wähle einen Fall.</div>
-  `;
+async function renderBusiness() {
+  var data = await post('getBusinessCases', { page: 1, pageSize: 50, filters: {} });
+  var rows = data.rows || [];
+
+  content.innerHTML = '<div class="small">Gesamt: ' + safe(data.count, 0) + '</div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Job</th><th>Periode</th><th>Firma</th><th>Status</th><th>Restschuld</th><th>Aktion</th></tr></thead><tbody>' +
+    rows.map(function(r) {
+      var sourceKey = (r.job || '') + '|' + (r.period || '');
+      return '<tr><td>' + (r.job_label || r.job || '-') + '</td><td>' + (r.period || '-') + '</td><td>' + (r.business_id || '-') + '</td><td>' + (r.status || '-') + '</td><td>$' + Number(safe(r.restschuld,0)).toFixed(2) + '</td><td><button data-detail="' + encodeURIComponent(JSON.stringify({ source_type: 'taxes_business', source_key: sourceKey })) + '">Akte</button></td></tr>';
+    }).join('') +
+    '</tbody></table></div><div id="detail" class="detail-panel small">Wähle einen Fall.</div>';
+
   bindDetailButtons();
-};
+}
 
-const renderTransactions = async () => {
-  const data = await post('getTransactions', { page: 1, pageSize: 80, filters: {} });
-  content.innerHTML = `
-    <div class="grid">
-      <div class="card"><h3>Analyse Score</h3><div class="val">${data.analysis?.score ?? 0}</div>${badge(data.analysis?.band)}</div>
-      <div class="card"><h3>Offene Steuerlast</h3><div class="val">$${(data.openDebt || 0).toFixed(2)}</div></div>
-      <div class="card"><h3>7T Eingänge</h3><div class="val">$${(data.windows?.[7]?.incoming || 0).toFixed(2)}</div></div>
-      <div class="card"><h3>7T Ausgänge</h3><div class="val">$${(data.windows?.[7]?.outgoing || 0).toFixed(2)}</div></div>
-    </div>
-    <div class="detail-panel">${(data.analysis?.reasons || []).join('\n') || 'Keine Auffälligkeit erkannt'}</div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>ID</th><th>Typ</th><th>Betrag</th><th>Sender</th><th>Empfänger</th><th>Datum</th></tr></thead>
-      <tbody>
-        ${(data.rows || []).map(tx => `<tr><td>${tx.id}</td><td>${tx.type || '-'}</td><td>$${(+tx.value).toFixed(2)}</td><td>${tx.sender_name || '-'}</td><td>${tx.receiver_name || '-'}</td><td>${tx.date || '-'}</td></tr>`).join('')}
-      </tbody></table></div>
-  `;
-};
+async function renderTransactions() {
+  var data = await post('getTransactions', { page: 1, pageSize: 80, filters: {} });
+  var analysis = data.analysis || { score: 0, band: 'unauffaellig', reasons: [] };
+  var w = data.windows || {};
+  var w7 = w[7] || { incoming: 0, outgoing: 0 };
 
-const renderReports = async () => {
-  const list = await post('listReports', { filters: { page: 1, pageSize: 50 } });
-  content.innerHTML = `
-    <div class="input-row">
-      <select id="reportType">
-        <option value="schuldnerreport">schuldnerreport</option>
-        <option value="hochrisikoreport">hochrisikoreport</option>
-        <option value="transaktionsauffaelligkeit">transaktionsauffaelligkeit</option>
-        <option value="zahlungsverhalten">zahlungsverhalten</option>
-      </select>
-      <button id="createReport">Report erstellen</button>
-    </div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>ID</th><th>Typ</th><th>Titel</th><th>Ersteller</th><th>Datum</th></tr></thead>
-      <tbody>${(list.rows || []).map(r => `<tr><td>${r.id}</td><td>${r.report_type}</td><td>${r.title}</td><td>${r.created_by}</td><td>${r.created_at}</td></tr>`).join('')}</tbody>
-    </table></div>
-  `;
+  content.innerHTML = '' +
+    '<div class="grid">' +
+      '<div class="card"><h3>Analyse Score</h3><div class="val">' + safe(analysis.score,0) + '</div>' + badge(analysis.band) + '</div>' +
+      '<div class="card"><h3>Offene Steuerlast</h3><div class="val">$' + Number(safe(data.openDebt,0)).toFixed(2) + '</div></div>' +
+      '<div class="card"><h3>7T Eingänge</h3><div class="val">$' + Number(safe(w7.incoming,0)).toFixed(2) + '</div></div>' +
+      '<div class="card"><h3>7T Ausgänge</h3><div class="val">$' + Number(safe(w7.outgoing,0)).toFixed(2) + '</div></div>' +
+    '</div>' +
+    '<div class="detail-panel">' + ((analysis.reasons || []).join('\n') || 'Keine Auffälligkeit erkannt') + '</div>' +
+    '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Betrag</th><th>Sender</th><th>Empfänger</th><th>Datum</th></tr></thead><tbody>' +
+      (data.rows || []).map(function(tx) {
+        return '<tr><td>' + tx.id + '</td><td>' + (tx.type || '-') + '</td><td>$' + Number(safe(tx.value,0)).toFixed(2) + '</td><td>' + (tx.sender_name || '-') + '</td><td>' + (tx.receiver_name || '-') + '</td><td>' + (tx.date || '-') + '</td></tr>';
+      }).join('') +
+    '</tbody></table></div>';
+}
 
-  document.getElementById('createReport')?.addEventListener('click', async () => {
-    const report_type = document.getElementById('reportType').value;
-    const created = await post('createReport', { report_type, payload: {} });
-    alert(created?.id ? `Report erstellt: ${created.id}` : 'Report fehlgeschlagen');
-    renderReports();
-  });
-};
+async function renderReports() {
+  var list = await post('listReports', { filters: { page: 1, pageSize: 50 } });
 
-const renderMapping = async () => {
-  const maps = await post('getBusinessMaps');
-  content.innerHTML = `
-    <div class="input-row">
-      <input id="taxJob" placeholder="tax_job" />
-      <input id="businessId" placeholder="business_id" />
-      <input id="alias" placeholder="alias (optional)" />
-      <button id="saveMap">Speichern</button>
-    </div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>tax_job</th><th>business_id</th><th>alias</th></tr></thead>
-      <tbody>${(maps.rows || []).map(m => `<tr><td>${m.tax_job}</td><td>${m.business_id}</td><td>${m.alias || '-'}</td></tr>`).join('')}</tbody>
-    </table></div>
-  `;
+  content.innerHTML = '<div class="input-row"><select id="reportType">' +
+    '<option value="schuldnerreport">schuldnerreport</option>' +
+    '<option value="hochrisikoreport">hochrisikoreport</option>' +
+    '<option value="transaktionsauffaelligkeit">transaktionsauffaelligkeit</option>' +
+    '<option value="zahlungsverhalten">zahlungsverhalten</option>' +
+    '</select><button id="createReport">Report erstellen</button></div>' +
+    '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Titel</th><th>Ersteller</th><th>Datum</th></tr></thead><tbody>' +
+    (list.rows || []).map(function(r) {
+      return '<tr><td>' + r.id + '</td><td>' + r.report_type + '</td><td>' + r.title + '</td><td>' + r.created_by + '</td><td>' + r.created_at + '</td></tr>';
+    }).join('') +
+    '</tbody></table></div>';
 
-  document.getElementById('saveMap')?.addEventListener('click', async () => {
-    const payload = {
-      tax_job: document.getElementById('taxJob').value,
-      business_id: document.getElementById('businessId').value,
-      alias: document.getElementById('alias').value
-    };
-    await post('upsertBusinessMap', payload);
-    renderMapping();
-  });
-};
+  var createBtn = document.getElementById('createReport');
+  if (createBtn) {
+    createBtn.addEventListener('click', async function() {
+      var select = document.getElementById('reportType');
+      var reportType = select ? select.value : 'schuldnerreport';
+      var created = await post('createReport', { report_type: reportType, payload: {} });
+      alert(created && created.id ? ('Report erstellt: ' + created.id) : 'Report fehlgeschlagen');
+      renderReports();
+    });
+  }
+}
 
-const render = async () => {
+async function renderMapping() {
+  var maps = await post('getBusinessMaps');
+  content.innerHTML = '<div class="input-row">' +
+    '<input id="taxJob" placeholder="tax_job" />' +
+    '<input id="businessId" placeholder="business_id" />' +
+    '<input id="alias" placeholder="alias (optional)" />' +
+    '<button id="saveMap">Speichern</button>' +
+    '</div><div class="table-wrap"><table><thead><tr><th>tax_job</th><th>business_id</th><th>alias</th></tr></thead><tbody>' +
+    (maps.rows || []).map(function(m) {
+      return '<tr><td>' + m.tax_job + '</td><td>' + m.business_id + '</td><td>' + (m.alias || '-') + '</td></tr>';
+    }).join('') +
+    '</tbody></table></div>';
+
+  var saveBtn = document.getElementById('saveMap');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async function() {
+      var payload = {
+        tax_job: (document.getElementById('taxJob') || {}).value || '',
+        business_id: (document.getElementById('businessId') || {}).value || '',
+        alias: (document.getElementById('alias') || {}).value || ''
+      };
+      await post('upsertBusinessMap', payload);
+      renderMapping();
+    });
+  }
+}
+
+async function render() {
   if (state.tab === 'dashboard') return renderDashboard();
   if (state.tab === 'private') return renderPrivate();
   if (state.tab === 'business') return renderBusiness();
   if (state.tab === 'transactions') return renderTransactions();
   if (state.tab === 'reports') return renderReports();
   if (state.tab === 'mapping') return renderMapping();
-};
+}
 
-const bindDetailButtons = () => {
-  document.querySelectorAll('[data-detail]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const payload = JSON.parse(btn.getAttribute('data-detail'));
-      const detail = await post('getCaseDetail', payload);
-      const bundle = detail.bundle || {};
-      const lines = [];
-      lines.push(`Status: ${bundle.review?.status || 'neu'}`);
-      lines.push(`Bearbeiter: ${bundle.review?.assigned_to || '-'}`);
-      lines.push(`Deadline: ${bundle.deadline?.due_date || 'Standard'}`);
+function bindDetailButtons() {
+  var buttons = document.querySelectorAll('[data-detail]');
+  buttons.forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      var raw = btn.getAttribute('data-detail');
+      var payload = JSON.parse(decodeURIComponent(raw));
+      var detail = await post('getCaseDetail', payload);
+      var bundle = detail.bundle || {};
+      var lines = [];
+      lines.push('Status: ' + ((bundle.review && bundle.review.status) || 'neu'));
+      lines.push('Bearbeiter: ' + ((bundle.review && bundle.review.assigned_to) || '-'));
+      lines.push('Deadline: ' + ((bundle.deadline && bundle.deadline.due_date) || 'Standard'));
       lines.push('--- Notizen ---');
-      (bundle.notes || []).slice(0, 8).forEach(n => lines.push(`${n.author_identifier}: ${n.note}`));
+      (bundle.notes || []).slice(0, 8).forEach(function(n) { lines.push((n.author_identifier || '-') + ': ' + (n.note || '-')); });
       lines.push('--- Audit ---');
-      (bundle.audit || []).slice(0, 8).forEach(a => lines.push(`${a.created_at}: ${a.action}`));
-      document.getElementById('detail').textContent = lines.join('\n');
+      (bundle.audit || []).slice(0, 8).forEach(function(a) { lines.push((a.created_at || '-') + ': ' + (a.action || '-')); });
+      var panel = document.getElementById('detail');
+      if (panel) panel.textContent = lines.join('\n');
     });
   });
-};
+}
 
-closeBtn.addEventListener('click', () => post('close'));
-tabs.forEach(tab => tab.addEventListener('click', () => setTab(tab.dataset.tab)));
+closeBtn.addEventListener('click', function() { post('close'); });
 
-window.addEventListener('message', (event) => {
-  const msg = event.data;
+tabs.forEach(function(tab) {
+  tab.addEventListener('click', function() { setTab(tab.dataset.tab); });
+});
+
+window.addEventListener('message', function(event) {
+  var msg = event.data || {};
   if (msg.action === 'open') {
     app.classList.remove('hidden');
     setTab('dashboard');

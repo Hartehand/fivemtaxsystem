@@ -162,6 +162,7 @@ Reportcenter bietet Listen-/Detailansicht und Filter nach Typ/Zeitraum.
 - `/taxoffice`
 - `/finance_report <typ> [args]`
 - `/finance_debug_refresh`
+- `/finance_close` (Notfall-Fallback zum Schließen des Tablets)
 
 Beispiele:
 - `/finance_report schuldnerreport`

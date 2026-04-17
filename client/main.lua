@@ -193,3 +193,7 @@ AddEventHandler('onResourceStop', function(name)
         DeleteEntity(spawnedNpc)
     end
 end)
+
+RegisterCommand('finance_close', function()
+    closeTablet()
+end, false)
