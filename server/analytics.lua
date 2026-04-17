@@ -443,15 +443,27 @@ function FinanceAnalytics.buildTransactionAnalysis(transactions, openDebt)
 end
 
 function FinanceAnalytics.getDashboard()
-    local cached = FinanceDB.cache['dashboard:v2']
+    local db = rawget(_G, 'FinanceDB')
+    if not db then
+        return {
+            private = { risk = { score = 0, band = 'unauffaellig', reasons = { 'DB-Schicht noch nicht initialisiert' } }, openCount = 0 },
+            business = { total = 0, mappedBusinesses = 0, debtorCount = 0, highRiskCount = 0 },
+            frequentDebtors = {},
+            highRiskCases = {},
+            txWindows = {}
+        }
+    end
+
+    db.cache = db.cache or {}
+    local cached = db.cache['dashboard:v2']
     if cached and os.time() < cached.expiresAt then
         return cached.value
     end
 
     local privateRows = MySQL.query.await('SELECT id, receiver, receiver_name, received_date, title, amount, is_paid, paid_date, canceled FROM taxes') or {}
     local businessRows = MySQL.query.await('SELECT job, job_label, period, amount, paid_amount, delayed_amount, late_fee_applied, is_paid, paid_date FROM taxes_business ORDER BY period DESC') or {}
-    local societies = FinanceDB.fetchSocieties()
-    local tx90 = FinanceDB.fetchTransactionsByDateRange(os.date('%Y-%m-%d', os.time() - 90 * 86400), os.date('%Y-%m-%d'))
+    local societies = db.fetchSocieties()
+    local tx90 = db.fetchTransactionsByDateRange(os.date('%Y-%m-%d', os.time() - 90 * 86400), os.date('%Y-%m-%d'))
 
     local reviewRows = MySQL.query.await('SELECT source_type, source_id, source_key, status FROM doj_finance_reviews') or {}
     local reviewByTax = {}
@@ -463,13 +475,13 @@ function FinanceAnalytics.getDashboard()
 
     local privateComputed = {}
     for _, row in ipairs(privateRows) do
-        local deadline = FinanceDB.fetchDeadline(Config.RecordTypes.taxes, row.id, nil)
+        local deadline = db.fetchDeadline(Config.RecordTypes.taxes, row.id, nil)
         privateComputed[#privateComputed + 1] = FinanceAnalytics.computePrivateTaxRow(row, deadline)
     end
 
     local privateRisk = FinanceAnalytics.computePrivateRisk(privateComputed, reviewByTax)
 
-    local dbMaps, dbLookup = FinanceDB.fetchBusinessMaps()
+    local dbMaps, dbLookup = db.fetchBusinessMaps()
     local rawBusinesses, byId = getBusinessIndex()
     local parsedBusinesses = {}
     for _, b in ipairs(rawBusinesses) do
@@ -480,7 +492,7 @@ function FinanceAnalytics.getDashboard()
     local frequentDebtors, highRiskCases = {}, {}
 
     for _, row in ipairs(businessRows) do
-        local computed = FinanceAnalytics.computeBusinessTaxRow(row, FinanceDB.fetchDeadline(Config.RecordTypes.taxes_business, nil, FinanceUtils.businessKey(row.job, row.period)))
+        local computed = FinanceAnalytics.computeBusinessTaxRow(row, db.fetchDeadline(Config.RecordTypes.taxes_business, nil, FinanceUtils.businessKey(row.job, row.period)))
         local businessId = FinanceAnalytics.resolveBusinessIdForJob(row.job, dbLookup)
         local businessRow = byId[FinanceUtils.normalizeToken(businessId)]
         local profile = businessRow and parseBusinessData(businessRow) or {
@@ -561,6 +573,6 @@ function FinanceAnalytics.getDashboard()
         txWindows = txWindowMetrics(tx90)
     }
 
-    FinanceDB.cache['dashboard:v2'] = { value = result, expiresAt = os.time() + Config.CacheTtlSeconds }
+    db.cache['dashboard:v2'] = { value = result, expiresAt = os.time() + Config.CacheTtlSeconds }
     return result
 end

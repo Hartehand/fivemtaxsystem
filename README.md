@@ -10,6 +10,7 @@ Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Report
 
 - **Regelbasierte Risk Engine (0-100)** mit erklärbaren Gründen, kein Blackbox-System.
 - **Korrigiertes Business-Matching**: primär über Mapping (`doj_finance_business_map`, `Config.BusinessJobMap`), fallback case-insensitive job↔business_id.
+- **Tablet-NUI statt Kontextmenüs** mit mehreren Arbeitsansichten (Dashboard, Fälle, Transaktionen, Reports, Mapping).
 - **Echte Fallakten** im Client:
   - Privatfall (`taxes.id`)
   - Business-Fall (`job|period`)
@@ -122,20 +123,19 @@ Die Resource behandelt `date` robust und unterstützt mehrere Formate (z. B. `YY
 
 ---
 
-## UI-Struktur (ox_lib)
+## UI-Struktur (Tablet-NUI)
 
 - Dashboard / Risikoanalyse
-- Privatsteuer-Fälle
-- Business-Steuerfälle
-- Businessprofil
+- Privatsteuer-Fälle (Tabellenansicht)
+- Business-Steuerfälle (Tabellenansicht)
+- Transaktionsanalyse (inkl. 7/30/90-Sicht)
 - Reportcenter
 - Business-Mapping
-- Fallaktionen:
-  - Status ändern
-  - Notiz hinzufügen
-  - Frist überschreiben/löschen
-  - Transaktion verknüpfen/lösen
-  - Aktenansicht mit Review/Notizen/Audit/Links
+- Fall-Detailpanel mit:
+  - Reviewstatus
+  - Notizen
+  - Auditverlauf
+  - Deadline-Infos
 
 ---
 

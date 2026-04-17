@@ -26,6 +26,14 @@ client_scripts {
     'client/main.lua'
 }
 
+ui_page 'html/index.html'
+
+files {
+    'html/index.html',
+    'html/styles.css',
+    'html/app.js'
+}
+
 dependencies {
     'es_extended',
     'ox_lib',
