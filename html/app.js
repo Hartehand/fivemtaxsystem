@@ -11,7 +11,10 @@ function post(action, data) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data || {})
-  }).then(function(res) { return res.json(); });
+  }).then(function(res) { return res.json(); }).catch(function(err) {
+    console.error('[doj_finance_suite][nui] post failed', action, err);
+    return {};
+  });
 }
 
 function badge(band) {
@@ -175,6 +178,7 @@ window.addEventListener('message', function(event) {
   if (msg.action === 'open') {
     console.log('[doj_finance_suite][nui] open message received', msg);
     app.classList.remove('hidden');
+    content.innerHTML = '<div class=\"card\"><h3>Tablet wird geladen...</h3><div class=\"small\">Falls Datenzugriff eingeschränkt ist, bleibt die Ansicht trotzdem geöffnet.</div></div>';
     try {
       setTab('dashboard');
     } catch (e) {

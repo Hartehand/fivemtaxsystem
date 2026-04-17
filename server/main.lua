@@ -256,7 +256,8 @@ end)
 local function openFinance(source)
     dprint(('openFinance requested by source %s'):format(source))
     if not hasAccess(source) then
-        return notify(source, 'Du bist nicht berechtigt.', 'error')
+        dprint(('source %s has no finance permissions, opening in limited mode'):format(source))
+        notify(source, 'Hinweis: Du hast keine Finanzrechte. Tablet wird im eingeschränkten Modus geöffnet.', 'warning')
     end
 
     TriggerClientEvent('doj_finance_suite:client:open', source)
