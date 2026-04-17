@@ -1,4 +1,16 @@
 FinanceAnalytics = {}
+local businessLookupCache = { expires = 0, rows = {} }
+
+local function getBusinessLookupRows()
+    if os.time() < (businessLookupCache.expires or 0) then
+        return businessLookupCache.rows or {}
+    end
+
+    local rows = MySQL.query.await('SELECT id, type FROM vms_business ORDER BY id ASC') or {}
+    businessLookupCache.rows = rows
+    businessLookupCache.expires = os.time() + math.max(30, Config.CacheTtlSeconds or 90)
+    return rows
+end
 
 local function getBusinessIndex()
     local rows = MySQL.query.await('SELECT id, type, owner, employees, data FROM vms_business') or {}
@@ -44,6 +56,14 @@ function FinanceAnalytics.resolveBusinessIdForJob(job, runtimeMap)
 
     if Config.BusinessJobAliases[token] and Config.BusinessJobMap[Config.BusinessJobAliases[token]] then
         return Config.BusinessJobMap[Config.BusinessJobAliases[token]], 'config_alias'
+    end
+
+    for _, row in ipairs(getBusinessLookupRows()) do
+        local idToken = FinanceUtils.normalizeToken(row.id)
+        local typeToken = FinanceUtils.normalizeToken(row.type)
+        if token ~= '' and (token == idToken or token == typeToken or idToken:find(token, 1, true) == 1 or token:find(idToken, 1, true) == 1) then
+            return row.id, 'auto_business_lookup'
+        end
     end
 
     return job, 'fallback_job_as_id'

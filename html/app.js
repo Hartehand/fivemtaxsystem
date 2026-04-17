@@ -66,7 +66,41 @@ function bindCaseDetailButtons() {
         (bundle.audit || []).slice(0, 8).forEach(function(a) { lines.push((a.created_at || '-') + ': ' + (a.action || '-')); });
 
         var panel = document.getElementById('detail');
-        if (panel) panel.textContent = lines.join('\n');
+        if (!panel) return;
+        panel.innerHTML = lines.join('<br/>') +
+          '<div class="input-row" style="margin-top:10px;">' +
+          '<button id="caseStartReview">Prüfverfahren starten</button>' +
+          '<input id="caseNote" placeholder="Notiztext" />' +
+          '<button id="caseSaveNote">Notiz speichern</button>' +
+          '</div>';
+
+        var startBtn = document.getElementById('caseStartReview');
+        if (startBtn) {
+          startBtn.addEventListener('click', function() {
+            post('setStatus', {
+              source_type: detail.source_type,
+              source_id: detail.source_id || null,
+              source_key: detail.source_key || null,
+              status: 'in_pruefung',
+              assigned_to: 'nui_operator'
+            });
+          });
+        }
+
+        var noteBtn = document.getElementById('caseSaveNote');
+        if (noteBtn) {
+          noteBtn.addEventListener('click', function() {
+            var text = (document.getElementById('caseNote') || {}).value || '';
+            if (!text) return;
+            post('addNote', {
+              source_type: detail.source_type,
+              source_id: detail.source_id || null,
+              source_key: detail.source_key || null,
+              note: text,
+              is_internal: true
+            });
+          });
+        }
       });
     });
   });
@@ -204,8 +238,8 @@ function renderCompanies() {
             startBtn.addEventListener('click', function() {
               post('setStatus', {
                 source_type: 'vms_business',
-                source_id: businessId,
-                source_key: null,
+                source_id: null,
+                source_key: businessId,
                 status: 'in_pruefung',
                 assigned_to: 'nui_operator'
               });
@@ -219,8 +253,8 @@ function renderCompanies() {
               if (!text) return;
               post('addNote', {
                 source_type: 'vms_business',
-                source_id: businessId,
-                source_key: null,
+                source_id: null,
+                source_key: businessId,
                 note: text,
                 is_internal: true
               });
