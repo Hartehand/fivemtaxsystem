@@ -74,14 +74,46 @@ end)
 lib.callback.register('doj_finance_suite:server:getBusinesses', function(source, page, pageSize)
     assertAccess(source)
     local rows, count = FinanceDB.fetchBusinessProfiles(page, pageSize)
+    local taxRows = MySQL.query.await('SELECT job, period, amount, paid_amount, delayed_amount, is_paid FROM taxes_business ORDER BY period DESC LIMIT 2500') or {}
+    local _, lookup = FinanceDB.fetchBusinessMaps()
+
+    local taxByBusiness = {}
+    for _, tax in ipairs(taxRows) do
+        local businessId = FinanceAnalytics.resolveBusinessIdForJob(tax.job, lookup)
+        local token = FinanceUtils.normalizeToken(businessId)
+        taxByBusiness[token] = taxByBusiness[token] or {}
+        taxByBusiness[token][#taxByBusiness[token] + 1] = tax
+    end
+
     local out = {}
     for _, row in ipairs(rows) do
+        local token = FinanceUtils.normalizeToken(row.id)
+        local debt = 0
+        local openCount = 0
+        for _, tax in ipairs(taxByBusiness[token] or {}) do
+            local amount = FinanceUtils.safeNumber(tax.amount)
+            local paid = FinanceUtils.safeNumber(tax.paid_amount)
+            local delayed = FinanceUtils.safeNumber(tax.delayed_amount)
+            local rest = math.max(0, amount - paid + delayed)
+            if rest > 0 then
+                debt = debt + rest
+                openCount = openCount + 1
+            end
+        end
+        local score = math.min(100, openCount * 15 + math.min(60, math.floor(debt / 2500)))
+
         out[#out + 1] = {
             id = row.id,
             type = row.type,
             owner = row.owner,
             employees = row.employees,
-            data = FinanceUtils.safeDecode(row.data)
+            data = FinanceUtils.safeDecode(row.data),
+            kpi = {
+                open_tax_cases = openCount,
+                rest_debt = debt,
+                score = score,
+                band = FinanceUtils.riskBand(score)
+            }
         }
     end
 

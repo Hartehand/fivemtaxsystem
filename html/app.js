@@ -166,11 +166,12 @@ function renderCompanies() {
   post('getBusinesses', { page: 1, pageSize: 100 }).then(function(data) {
     var rows = (data.rows || []).map(function(b) {
       var p = b.data || {};
+      var kpi = b.kpi || {};
       var payload = encodeURIComponent(JSON.stringify({ business_id: b.id }));
-      return '<tr><td>' + (b.id || '-') + '</td><td>' + (b.type || '-') + '</td><td>' + (b.owner || '-') + '</td><td>' + money(p.balance) + '</td><td>' + money(p.totalEarned) + '</td><td>' + safe(p.totalOrders, 0) + '</td><td>' + safe(p.totalSales, 0) + '</td><td><button data-company="' + payload + '">Details</button></td></tr>';
+      return '<tr><td>' + (b.id || '-') + '</td><td>' + (b.type || '-') + '</td><td>' + (b.owner || '-') + '</td><td>' + money(p.balance) + '</td><td>' + money(p.totalEarned) + '</td><td>' + safe(p.totalOrders, 0) + '</td><td>' + safe(p.totalSales, 0) + '</td><td>' + safe(kpi.score, 0) + ' ' + badge(kpi.band) + '</td><td>' + safe(kpi.open_tax_cases, 0) + '</td><td><button data-company="' + payload + '">Details</button></td></tr>';
     }).join('');
 
-    content.innerHTML = '<div class="small">Unternehmen gesamt: ' + safe(data.count, 0) + '</div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Owner</th><th>Balance</th><th>TotalEarned</th><th>Orders</th><th>Sales</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="companyDetail" class="detail-panel small">Wähle ein Unternehmen für Detailansicht.</div>';
+    content.innerHTML = '<div class="small">Unternehmen gesamt: ' + safe(data.count, 0) + '</div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Owner</th><th>Balance</th><th>TotalEarned</th><th>Orders</th><th>Sales</th><th>Score</th><th>Offene Steuerfälle</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="companyDetail" class="detail-panel small">Wähle ein Unternehmen für Detailansicht.</div>';
 
     var buttons = document.querySelectorAll('[data-company]');
     buttons.forEach(function(btn) {
@@ -231,7 +232,27 @@ function renderCompanies() {
   });
 }
 
-function renderReports() {
+function renderReports(selectedReportId) {
+  function fillReportDetail(reportId) {
+    post('getReport', { report_id: reportId }).then(function(detail) {
+      var panel = document.getElementById('reportDetail');
+      if (!panel) return;
+      if (!detail || !detail.report) {
+        panel.textContent = 'Report konnte nicht geladen werden.';
+        return;
+      }
+      var lines = [];
+      lines.push('Report: ' + (detail.report.title || '-'));
+      lines.push('Typ: ' + (detail.report.report_type || '-'));
+      lines.push('Erstellt: ' + (detail.report.created_at || '-'));
+      lines.push('--- Einträge ---');
+      (detail.entries || []).slice(0, 80).forEach(function(e) {
+        lines.push('#' + e.line_no + ' | ' + e.label + ' | ' + money(e.amount));
+      });
+      panel.textContent = lines.join('\n');
+    });
+  }
+
   post('listReports', { filters: { page: 1, pageSize: 50 } }).then(function(list) {
     var rows = (list.rows || []).map(function(r) {
       return '<tr><td>' + r.id + '</td><td>' + r.report_type + '</td><td>' + r.title + '</td><td>' + r.created_by + '</td><td>' + r.created_at + '</td><td><button data-report="' + r.id + '">Ansehen</button></td></tr>';
@@ -244,11 +265,16 @@ function renderReports() {
       createBtn.addEventListener('click', function() {
         var reportType = (document.getElementById('reportType') || {}).value || 'schuldnerreport';
         var panel = document.getElementById('reportDetail');
+        createBtn.disabled = true;
         if (panel) panel.textContent = 'Report wird erstellt...';
 
         post('createReport', { report_type: reportType, payload: {} }).then(function(created) {
-          if (panel) panel.textContent = created && created.id ? ('Report erstellt: ' + created.id) : 'Report fehlgeschlagen';
-          renderReports();
+          createBtn.disabled = false;
+          if (created && created.id) {
+            renderReports(created.id);
+          } else if (panel) {
+            panel.textContent = 'Report fehlgeschlagen';
+          }
         });
       });
     }
@@ -257,25 +283,13 @@ function renderReports() {
     reportButtons.forEach(function(btn) {
       btn.addEventListener('click', function() {
         var reportId = Number(btn.getAttribute('data-report'));
-        post('getReport', { report_id: reportId }).then(function(detail) {
-          var panel = document.getElementById('reportDetail');
-          if (!panel) return;
-          if (!detail || !detail.report) {
-            panel.textContent = 'Report konnte nicht geladen werden.';
-            return;
-          }
-          var lines = [];
-          lines.push('Report: ' + (detail.report.title || '-'));
-          lines.push('Typ: ' + (detail.report.report_type || '-'));
-          lines.push('Erstellt: ' + (detail.report.created_at || '-'));
-          lines.push('--- Einträge ---');
-          (detail.entries || []).slice(0, 80).forEach(function(e) {
-            lines.push('#' + e.line_no + ' | ' + e.label + ' | ' + money(e.amount));
-          });
-          panel.textContent = lines.join('\n');
-        });
+        fillReportDetail(reportId);
       });
     });
+
+    if (selectedReportId) {
+      fillReportDetail(Number(selectedReportId));
+    }
   });
 }
 

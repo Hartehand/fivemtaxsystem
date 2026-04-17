@@ -1,16 +1,28 @@
 FinanceReports = {}
 
 local function addReport(reportType, title, createdBy, rangeFrom, rangeTo, summary, entries, notes)
+    local maxEntries = (Config.Reports and Config.Reports.maxEntries) or 400
+    local trimmedEntries = {}
+    for i = 1, math.min(maxEntries, #(entries or {})) do
+        trimmedEntries[#trimmedEntries + 1] = entries[i]
+    end
+
+    local wrappedSummary = summary or {}
+    wrappedSummary.meta = wrappedSummary.meta or {}
+    wrappedSummary.meta.entry_count_total = #(entries or {})
+    wrappedSummary.meta.entry_count_saved = #trimmedEntries
+    wrappedSummary.meta.entries_truncated = #(entries or {}) > #trimmedEntries
+
     local reportId = MySQL.insert.await('INSERT INTO doj_finance_reports (report_type, title, created_by, range_from, range_to, summary) VALUES (?, ?, ?, ?, ?, ?)', {
         reportType,
         title,
         createdBy,
         rangeFrom,
         rangeTo,
-        json.encode({ summary = summary, notes = notes or '' })
+        json.encode({ summary = wrappedSummary, notes = notes or '' })
     })
 
-    for i, entry in ipairs(entries or {}) do
+    for i, entry in ipairs(trimmedEntries) do
         MySQL.insert.await('INSERT INTO doj_finance_report_entries (report_id, line_no, source_type, source_id, source_key, label, amount, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', {
             reportId,
             i,

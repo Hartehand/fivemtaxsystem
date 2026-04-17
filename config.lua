@@ -7,6 +7,9 @@ Config.DefaultPageSize = 25
 Config.MaxPageSize = 100
 Config.MaxAuditRows = 100
 Config.DefaultRecentTransactionsLimit = 25
+Config.Reports = {
+    maxEntries = 400
+}
 
 Config.AllowedJobs = {
     doj = true,
