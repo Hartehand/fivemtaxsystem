@@ -147,7 +147,8 @@ CREATE TABLE IF NOT EXISTS `doj_finance_transaction_map` (
 ALTER TABLE `doj_finance_reviews`
   ADD COLUMN IF NOT EXISTS `priority` VARCHAR(24) NULL AFTER `status`,
   ADD COLUMN IF NOT EXISTS `evidence` LONGTEXT NULL AFTER `assigned_to`,
-  ADD COLUMN IF NOT EXISTS `doj_case_id` BIGINT NULL AFTER `evidence`;
+  ADD COLUMN IF NOT EXISTS `doj_case_id` BIGINT NULL AFTER `evidence`,
+  ADD COLUMN IF NOT EXISTS `follow_up_at` DATETIME NULL AFTER `doj_case_id`;
 
 CREATE TABLE IF NOT EXISTS `doj_finance_case_links` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

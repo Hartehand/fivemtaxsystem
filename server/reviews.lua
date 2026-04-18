@@ -162,3 +162,28 @@ function FinanceReviews.removeLink(source, payload)
     })
     return true
 end
+
+function FinanceReviews.setCaseMeta(source, payload)
+    local refId, refKey = normalizeSourceRef(payload.source_type, payload.source_id, payload.source_key)
+    local reviewId = FinanceReviews.ensureReview(payload.source_type, refId, refKey)
+
+    FinanceDB.updateReviewMeta(reviewId, {
+        priority = payload.priority,
+        evidence = payload.evidence,
+        doj_case_id = payload.doj_case_id,
+        follow_up_at = payload.follow_up_at,
+        assigned_to = payload.assigned_to
+    })
+
+    if payload.doj_case_id or payload.doj_case_number then
+        FinanceDB.upsertCaseLink(reviewId, payload.doj_case_id, payload.doj_case_number, payload.link_type or 'related', playerIdentifier(source))
+    end
+
+    FinanceReviews.addAudit(payload.source_type, refId, refKey, 'case_meta_updated', playerIdentifier(source), {
+        priority = payload.priority,
+        doj_case_id = payload.doj_case_id,
+        follow_up_at = payload.follow_up_at
+    })
+
+    return true
+end

@@ -516,7 +516,7 @@ function FinanceDB.fetchBusinessTaxHistory(job)
 end
 
 function FinanceDB.fetchReviewBySource(sourceType, sourceId, sourceKey)
-    return MySQL.single.await('SELECT id, status, assigned_to, created_at, updated_at FROM doj_finance_reviews WHERE source_type = ? AND source_id <=> ? AND source_key <=> ?', {
+    return MySQL.single.await('SELECT id, status, priority, assigned_to, evidence, doj_case_id, follow_up_at, created_at, updated_at FROM doj_finance_reviews WHERE source_type = ? AND source_id <=> ? AND source_key <=> ?', {
         sourceType,
         sourceId,
         sourceKey
@@ -540,7 +540,138 @@ function FinanceDB.fetchReviewBundle(sourceType, sourceId, sourceKey)
         Config.MaxAuditRows
     }) or {}
 
-    return { review = review, notes = notes, audit = audit }
+    local caseLinks = {}
+    if FinanceDB.tableExists('doj_finance_case_links') then
+        caseLinks = MySQL.query.await('SELECT id, review_id, doj_case_id, doj_case_number, link_type, created_by, created_at FROM doj_finance_case_links WHERE review_id = ? ORDER BY id DESC', {
+            review.id
+        }) or {}
+    end
+
+    if review and review.evidence then
+        review.evidence = FinanceUtils.safeDecode(review.evidence)
+    end
+
+    return { review = review, notes = notes, audit = audit, case_links = caseLinks }
+end
+
+function FinanceDB.updateReviewMeta(reviewId, payload)
+    MySQL.update.await([[
+        UPDATE doj_finance_reviews
+        SET priority = ?, evidence = ?, doj_case_id = ?, follow_up_at = ?, assigned_to = COALESCE(?, assigned_to), updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    ]], {
+        payload.priority,
+        json.encode(payload.evidence or {}),
+        payload.doj_case_id,
+        payload.follow_up_at,
+        payload.assigned_to,
+        reviewId
+    })
+end
+
+function FinanceDB.upsertCaseLink(reviewId, dojCaseId, dojCaseNumber, linkType, createdBy)
+    if not FinanceDB.tableExists('doj_finance_case_links') then return nil end
+    return MySQL.insert.await([[
+        INSERT INTO doj_finance_case_links (review_id, doj_case_id, doj_case_number, link_type, created_by)
+        VALUES (?, ?, ?, ?, ?)
+    ]], { reviewId, dojCaseId, dojCaseNumber, linkType or 'related', createdBy })
+end
+
+function FinanceDB.fetchCaseTimeline(sourceType, sourceId, sourceKey)
+    local bundle = FinanceDB.fetchReviewBundle(sourceType, sourceId, sourceKey)
+    local timeline = {}
+    for _, a in ipairs(bundle.audit or {}) do
+        timeline[#timeline + 1] = { kind = 'audit', created_at = a.created_at, title = a.action, payload = FinanceUtils.safeDecode(a.payload) }
+    end
+    for _, n in ipairs(bundle.notes or {}) do
+        timeline[#timeline + 1] = { kind = 'note', created_at = n.created_at, title = n.author_identifier, payload = { note = n.note, is_internal = n.is_internal } }
+    end
+    for _, l in ipairs(bundle.case_links or {}) do
+        timeline[#timeline + 1] = { kind = 'doj_link', created_at = l.created_at, title = l.doj_case_number or tostring(l.doj_case_id or '-'), payload = l }
+    end
+    local deadline = FinanceDB.fetchDeadline(sourceType, sourceId, sourceKey)
+    if deadline then
+        timeline[#timeline + 1] = { kind = 'deadline', created_at = deadline.updated_at or deadline.created_at, title = deadline.due_date, payload = deadline }
+    end
+
+    table.sort(timeline, function(a, b)
+        return tostring(a.created_at or '') > tostring(b.created_at or '')
+    end)
+    return timeline
+end
+
+function FinanceDB.fetchBusinessLinkProfile(businessId)
+    local business = FinanceDB.fetchBusinessById(businessId)
+    if not business then
+        return nil
+    end
+
+    local ownerData = FinanceUtils.safeDecode(business.owner)
+    local employeesData = FinanceUtils.safeDecode(business.employees)
+    local owners, employees = {}, {}
+
+    local function collectIdentifiers(src, out)
+        if type(src) == 'table' then
+            for _, v in pairs(src) do
+                if type(v) == 'table' then
+                    local ident = v.identifier or v.owner or v.id
+                    if ident then out[#out + 1] = tostring(ident) end
+                elseif type(v) == 'string' then
+                    out[#out + 1] = v
+                end
+            end
+        elseif type(src) == 'string' and src ~= '' then
+            out[#out + 1] = src
+        end
+    end
+
+    collectIdentifiers(ownerData, owners)
+    collectIdentifiers(employeesData, employees)
+
+    local ownerSet = {}
+    for _, id in ipairs(owners) do ownerSet[id] = true end
+
+    local usersRows, vehiclesRows, casesRows, societiesRows = {}, {}, {}, {}
+    if FinanceDB.tableExists('users') then
+        local base = MySQL.query.await('SELECT identifier, firstname, lastname, job, iban, phone_number FROM users WHERE lower(job) = lower(?) LIMIT 400', { businessId }) or {}
+        for _, u in ipairs(base) do
+            if ownerSet[u.identifier] or tostring(u.job or ''):lower() == tostring(businessId):lower() then
+                usersRows[#usersRows + 1] = u
+            end
+        end
+    end
+    if FinanceDB.tableExists('owned_vehicles') then
+        local base = MySQL.query.await('SELECT owner, owner_name, company, plate, vehicle, parking_date FROM owned_vehicles WHERE lower(company) = lower(?) LIMIT 600', { businessId }) or {}
+        for _, v in ipairs(base) do
+            if ownerSet[v.owner] or tostring(v.company or ''):lower() == tostring(businessId):lower() then
+                vehiclesRows[#vehiclesRows + 1] = v
+            end
+        end
+    end
+    if FinanceDB.tableExists('doj_cases') then
+        local base = MySQL.query.await('SELECT id, case_number, status, priority, lead_identifier, lead_name, updated_at FROM doj_cases ORDER BY id DESC LIMIT 600') or {}
+        for _, c in ipairs(base) do
+            if ownerSet[c.lead_identifier] then
+                casesRows[#casesRows + 1] = c
+            end
+        end
+    end
+    if FinanceDB.tableExists('okokbanking_societies') then
+        societiesRows = MySQL.query.await('SELECT society, society_name, value, iban FROM okokbanking_societies WHERE lower(society) = lower(?) OR lower(society_name) = lower(?) LIMIT 50', {
+            businessId,
+            businessId
+        }) or {}
+    end
+
+    return {
+        business = business,
+        owners = owners,
+        employees = employees,
+        users = usersRows,
+        vehicles = vehiclesRows,
+        doj_cases = casesRows,
+        societies = societiesRows
+    }
 end
 
 function FinanceDB.fetchDeadline(sourceType, sourceId, sourceKey)

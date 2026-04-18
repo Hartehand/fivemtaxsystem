@@ -232,6 +232,47 @@ function FinanceReports.generate(source, reportType, payload)
         return addReport('person_risk_report', 'Person Risk Report', actor, nil, nil, {
             anzahl = #entries
         }, entries)
+    elseif reportType == 'asset_mismatch_report' then
+        local dashboard = FinanceAnalytics.getDashboard()
+        local entries = {}
+        for _, p in ipairs(dashboard.suspiciousPeople or {}) do
+            entries[#entries + 1] = {
+                source_type = 'users',
+                source_key = p.identifier,
+                label = ('%s (%s)'):format(p.name or p.identifier, p.job or '-'),
+                amount = p.score,
+                payload = p
+            }
+        end
+        return addReport('asset_mismatch_report', 'Asset Mismatch Report', actor, nil, nil, { anzahl = #entries }, entries)
+    elseif reportType == 'cityhall_charge_finance_report' then
+        local rows = FinanceDB.fetchAssetSignals().charges or {}
+        local entries = {}
+        for _, c in ipairs(rows) do
+            entries[#entries + 1] = {
+                source_type = 'vms_cityhall_wasabi_bridge_sync',
+                source_key = c.target_identifier,
+                label = ('%s / %s'):format(c.target_name or c.target_identifier, c.status or '-'),
+                amount = 0,
+                payload = c
+            }
+        end
+        return addReport('cityhall_charge_finance_report', 'Cityhall Charge Finance Report', actor, nil, nil, { anzahl = #entries }, entries)
+    elseif reportType == 'business_person_link_report' then
+        local businesses = FinanceDB.fetchAllBusinessRefs()
+        local entries = {}
+        for i = 1, math.min(120, #businesses) do
+            local b = businesses[i]
+            local profile = FinanceDB.fetchBusinessLinkProfile(b.id)
+            entries[#entries + 1] = {
+                source_type = Config.RecordTypes.business,
+                source_key = b.id,
+                label = ('%s (%s)'):format(b.id, b.type or '-'),
+                amount = ((profile and profile.users) and #profile.users or 0) + ((profile and profile.vehicles) and #profile.vehicles or 0),
+                payload = profile
+            }
+        end
+        return addReport('business_person_link_report', 'Business Person Link Report', actor, nil, nil, { anzahl = #entries }, entries)
     end
 
     return nil

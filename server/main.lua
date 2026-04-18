@@ -175,6 +175,11 @@ lib.callback.register('doj_finance_suite:server:getBusinessProfile', function(so
     }
 end)
 
+lib.callback.register('doj_finance_suite:server:getBusinessLinkProfile', function(source, businessId)
+    assertAccess(source)
+    return FinanceDB.fetchBusinessLinkProfile(businessId)
+end)
+
 lib.callback.register('doj_finance_suite:server:getCaseDetail', function(source, sourceType, sourceId, sourceKey)
     assertAccess(source)
     local data = nil
@@ -215,6 +220,11 @@ lib.callback.register('doj_finance_suite:server:getCaseDetail', function(source,
     }
 end)
 
+lib.callback.register('doj_finance_suite:server:getCaseTimeline', function(source, sourceType, sourceId, sourceKey)
+    assertAccess(source)
+    return FinanceDB.fetchCaseTimeline(sourceType, sourceId, sourceKey)
+end)
+
 lib.callback.register('doj_finance_suite:server:setReviewStatus', function(source, payload)
     assertAccess(source)
     return FinanceReviews.setStatus(source, payload)
@@ -223,6 +233,11 @@ end)
 lib.callback.register('doj_finance_suite:server:addReviewNote', function(source, payload)
     assertAccess(source)
     return FinanceReviews.addNote(source, payload)
+end)
+
+lib.callback.register('doj_finance_suite:server:setCaseMeta', function(source, payload)
+    assertAccess(source)
+    return FinanceReviews.setCaseMeta(source, payload)
 end)
 
 lib.callback.register('doj_finance_suite:server:setDeadline', function(source, payload)

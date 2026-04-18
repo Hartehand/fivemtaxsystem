@@ -86,8 +86,11 @@ function bindCaseDetailButtons() {
         panel.innerHTML = lines.join('<br/>') +
           '<div class="input-row" style="margin-top:10px;">' +
           '<button id="caseStartReview">Prüfverfahren starten</button>' +
+          '<input id="casePriority" placeholder="Priorität (low/normal/high)" />' +
+          '<input id="caseDojCase" placeholder="DOJ Case ID" />' +
           '<input id="caseNote" placeholder="Notiztext" />' +
           '<button id="caseSaveNote">Notiz speichern</button>' +
+          '<button id="caseSaveMeta">Meta speichern</button>' +
           '</div>';
 
         var startBtn = document.getElementById('caseStartReview');
@@ -117,6 +120,33 @@ function bindCaseDetailButtons() {
             });
           });
         }
+
+        var metaBtn = document.getElementById('caseSaveMeta');
+        if (metaBtn) {
+          metaBtn.addEventListener('click', function() {
+            var priority = (document.getElementById('casePriority') || {}).value || 'normal';
+            var dojCase = Number((document.getElementById('caseDojCase') || {}).value || 0);
+            post('setCaseMeta', {
+              source_type: detail.source_type,
+              source_id: detail.source_id || null,
+              source_key: detail.source_key || null,
+              priority: priority,
+              doj_case_id: dojCase > 0 ? dojCase : null,
+              evidence: { reason_snapshot: lines.slice(0, 6) }
+            });
+          });
+        }
+
+        post('getCaseTimeline', {
+          source_type: detail.source_type,
+          source_id: detail.source_id || null,
+          source_key: detail.source_key || null
+        }).then(function(tl) {
+          var rows = (tl.rows || []).slice(0, 15).map(function(e) {
+            return (e.created_at || '-') + ' | ' + (e.kind || '-') + ' | ' + (e.title || '-');
+          }).join('<br/>');
+          panel.innerHTML += '<div class="detail-panel small" style="margin-top:10px;">' + (rows || 'Keine Timeline-Einträge') + '</div>';
+        });
       });
     });
   });
@@ -249,7 +279,7 @@ function renderCompanies() {
             lines.push('#' + tx.id + ' | ' + (tx.type || '-') + ' | ' + money(tx.value) + ' | ' + (tx.date || '-'));
           });
 
-          panel.innerHTML = lines.join('<br/>') + '<div class="input-row" style="margin-top:10px;"><button id="startReview">Prüfverfahren starten</button><input id="companyNote" placeholder="Notiztext" /><button id="saveCompanyNote">Notiz speichern</button></div>';
+          panel.innerHTML = lines.join('<br/>') + '<div class="input-row" style="margin-top:10px;"><button id="startReview">Prüfverfahren starten</button><input id="companyNote" placeholder="Notiztext" /><button id="saveCompanyNote">Notiz speichern</button><button id="companyLinkProfile">Link-Profil</button></div><div id="companyLinkPanel" class="detail-panel small"></div>';
 
           var businessId = detail.business.id;
           var startBtn = document.getElementById('startReview');
@@ -276,6 +306,28 @@ function renderCompanies() {
                 source_key: businessId,
                 note: text,
                 is_internal: true
+              });
+            });
+          }
+
+          var linkBtn = document.getElementById('companyLinkProfile');
+          if (linkBtn) {
+            linkBtn.addEventListener('click', function() {
+              post('getBusinessLinkProfile', { business_id: businessId }).then(function(linkProfile) {
+                var p = document.getElementById('companyLinkPanel');
+                if (!p) return;
+                if (!linkProfile || !linkProfile.business) {
+                  p.textContent = 'Kein Link-Profil verfügbar.';
+                  return;
+                }
+                var out = [];
+                out.push('Owners: ' + (linkProfile.owners || []).join(', '));
+                out.push('Employees: ' + (linkProfile.employees || []).slice(0, 10).join(', '));
+                out.push('Users verknüpft: ' + safe((linkProfile.users || []).length, 0));
+                out.push('Fahrzeuge verknüpft: ' + safe((linkProfile.vehicles || []).length, 0));
+                out.push('DOJ Cases verknüpft: ' + safe((linkProfile.doj_cases || []).length, 0));
+                out.push('Societies/IBAN Hits: ' + safe((linkProfile.societies || []).length, 0));
+                p.textContent = out.join('\n');
               });
             });
           }
@@ -311,7 +363,7 @@ function renderReports(selectedReportId) {
       return '<tr><td>' + r.id + '</td><td>' + r.report_type + '</td><td>' + r.title + '</td><td>' + r.created_by + '</td><td>' + r.created_at + '</td><td><button data-report="' + r.id + '">Ansehen</button></td></tr>';
     }).join('');
 
-    content.innerHTML = '<div class="input-row"><select id="reportType"><option value="schuldnerreport">schuldnerreport</option><option value="hochrisikoreport">hochrisikoreport</option><option value="transaktionsauffaelligkeit">transaktionsauffaelligkeit</option><option value="zahlungsverhalten">zahlungsverhalten</option><option value="debtor_master_report">debtor_master_report</option><option value="person_risk_report">person_risk_report</option></select><button id="createReport">Report erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Titel</th><th>Ersteller</th><th>Datum</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="reportDetail" class="detail-panel small">Wähle einen Report zum Anzeigen.</div>';
+    content.innerHTML = '<div class="input-row"><select id="reportType"><option value="schuldnerreport">schuldnerreport</option><option value="hochrisikoreport">hochrisikoreport</option><option value="transaktionsauffaelligkeit">transaktionsauffaelligkeit</option><option value="zahlungsverhalten">zahlungsverhalten</option><option value="debtor_master_report">debtor_master_report</option><option value="person_risk_report">person_risk_report</option><option value="asset_mismatch_report">asset_mismatch_report</option><option value="cityhall_charge_finance_report">cityhall_charge_finance_report</option><option value="business_person_link_report">business_person_link_report</option></select><button id="createReport">Report erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Titel</th><th>Ersteller</th><th>Datum</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="reportDetail" class="detail-panel small">Wähle einen Report zum Anzeigen.</div>';
 
     var createBtn = document.getElementById('createReport');
     if (createBtn) {

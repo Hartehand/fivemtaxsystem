@@ -162,6 +162,9 @@ Unterstützte Typen:
 - `unternehmens_risiko`
 - `transaktionsauffaelligkeit`
 - `zahlungsverhalten`
+- `asset_mismatch_report`
+- `cityhall_charge_finance_report`
+- `business_person_link_report`
 
 Reportcenter bietet Listen-/Detailansicht und Filter nach Typ/Zeitraum.
 
