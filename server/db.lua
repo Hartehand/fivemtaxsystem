@@ -495,8 +495,25 @@ end
 
 function FinanceDB.upsertEnforcement(payload)
     if not FinanceDB.tableExists('doj_finance_enforcement') then return nil end
+    local allowedTransitions = {
+        offen = { erinnerung = true, mahnung = true, ausgesetzt = true, erledigt = true },
+        erinnerung = { mahnung = true, letzte_frist = true, ausgesetzt = true, erledigt = true },
+        mahnung = { letzte_frist = true, vollstreckung_empfohlen = true, ausgesetzt = true, erledigt = true },
+        letzte_frist = { vollstreckung_empfohlen = true, ausgesetzt = true, erledigt = true },
+        vollstreckung_empfohlen = { ausgesetzt = true, erledigt = true },
+        ausgesetzt = { offen = true, erinnerung = true, mahnung = true, erledigt = true },
+        erledigt = {}
+    }
+
     local id = payload.id
     if id then
+        local current = MySQL.single.await('SELECT status FROM doj_finance_enforcement WHERE id = ?', { id })
+        if current and current.status and payload.status and current.status ~= payload.status then
+            local allowed = allowedTransitions[current.status] and allowedTransitions[current.status][payload.status]
+            if not allowed then
+                return nil
+            end
+        end
         MySQL.update.await([[
             UPDATE doj_finance_enforcement
             SET status = ?, reason = ?, next_due_date = ?, last_contact_at = ?, last_action_at = NOW(), set_by = ?, updated_at = CURRENT_TIMESTAMP
@@ -504,10 +521,16 @@ function FinanceDB.upsertEnforcement(payload)
         ]], { payload.status, payload.reason, payload.next_due_date, payload.last_contact_at, payload.set_by, id })
         return id
     end
+
+    local nextDue = payload.next_due_date
+    if (not nextDue or nextDue == '') and payload.status and payload.status ~= 'erledigt' then
+        nextDue = os.date('%Y-%m-%d', os.time() + 7 * 86400)
+    end
+
     return MySQL.insert.await([[
         INSERT INTO doj_finance_enforcement (source_type, source_id, source_key, subject_type, subject_identifier, status, reason, next_due_date, last_contact_at, last_action_at, set_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
-    ]], { payload.source_type, payload.source_id, payload.source_key, payload.subject_type, payload.subject_identifier, payload.status, payload.reason, payload.next_due_date, payload.last_contact_at, payload.set_by })
+    ]], { payload.source_type, payload.source_id, payload.source_key, payload.subject_type, payload.subject_identifier, payload.status, payload.reason, nextDue, payload.last_contact_at, payload.set_by })
 end
 
 function FinanceDB.addEnforcementEvent(enforcementId, oldStatus, newStatus, note, changedBy)
@@ -519,6 +542,19 @@ end
 
 function FinanceDB.listInstallmentPlans(filters)
     if not FinanceDB.tableExists('doj_finance_installment_plans') then return {}, 0 end
+    if FinanceDB.tableExists('doj_finance_installment_entries') then
+        MySQL.update.await("UPDATE doj_finance_installment_entries SET status = 'verspaetet' WHERE status = 'offen' AND due_date < CURDATE()")
+        MySQL.update.await([[
+            UPDATE doj_finance_installment_plans p
+            SET p.status = CASE
+                WHEN NOT EXISTS (SELECT 1 FROM doj_finance_installment_entries e WHERE e.plan_id = p.id AND e.status <> 'bezahlt') THEN 'erfüllt'
+                WHEN EXISTS (SELECT 1 FROM doj_finance_installment_entries e WHERE e.plan_id = p.id AND e.status = 'verspaetet') THEN 'verspätet'
+                ELSE p.status
+            END,
+            p.next_due_date = (SELECT MIN(e2.due_date) FROM doj_finance_installment_entries e2 WHERE e2.plan_id = p.id AND e2.status <> 'bezahlt')
+        ]])
+    end
+
     filters = filters or {}
     local clauses, params = { '1=1' }, {}
     if filters.status and filters.status ~= '' then
@@ -767,7 +803,7 @@ function FinanceDB.fetchBusinessLinkProfile(businessId)
 
     local usersRows, vehiclesRows, casesRows, societiesRows = {}, {}, {}, {}
     if FinanceDB.tableExists('users') then
-        local base = MySQL.query.await('SELECT identifier, firstname, lastname, job, iban, phone_number FROM users WHERE lower(job) = lower(?) LIMIT 400', { businessId }) or {}
+        local base = MySQL.query.await('SELECT identifier, firstname, lastname, job, iban, phone_number FROM users ORDER BY last_seen DESC LIMIT 2500') or {}
         for _, u in ipairs(base) do
             if ownerSet[u.identifier] or tostring(u.job or ''):lower() == tostring(businessId):lower() then
                 usersRows[#usersRows + 1] = u
@@ -775,7 +811,7 @@ function FinanceDB.fetchBusinessLinkProfile(businessId)
         end
     end
     if FinanceDB.tableExists('owned_vehicles') then
-        local base = MySQL.query.await('SELECT owner, owner_name, company, plate, vehicle, parking_date FROM owned_vehicles WHERE lower(company) = lower(?) LIMIT 600', { businessId }) or {}
+        local base = MySQL.query.await('SELECT owner, owner_name, company, plate, vehicle, parking_date FROM owned_vehicles ORDER BY parking_date DESC LIMIT 2500') or {}
         for _, v in ipairs(base) do
             if ownerSet[v.owner] or tostring(v.company or ''):lower() == tostring(businessId):lower() then
                 vehiclesRows[#vehiclesRows + 1] = v

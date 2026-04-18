@@ -363,7 +363,10 @@ lib.callback.register('doj_finance_suite:server:upsertEnforcement', function(sou
     assertAccess(source)
     local actor = getPlayer(source)
     local identifier = actor and actor.getIdentifier and actor.getIdentifier() or 'system'
-    local previous = payload.id and MySQL.single.await('SELECT status FROM doj_finance_enforcement WHERE id = ?', { payload.id }) or nil
+    local previous = nil
+    if payload.id and FinanceDB.tableExists('doj_finance_enforcement') then
+        previous = MySQL.single.await('SELECT status FROM doj_finance_enforcement WHERE id = ?', { payload.id })
+    end
     payload.set_by = identifier
     local id = FinanceDB.upsertEnforcement(payload)
     if id then
@@ -409,9 +412,27 @@ lib.callback.register('doj_finance_suite:server:createCaseHandoff', function(sou
     assertAccess(source)
     local actor = getPlayer(source)
     local identifier = actor and actor.getIdentifier and actor.getIdentifier() or 'system'
-    local detail = FinanceDB.fetchCaseTimeline(payload.source_type, payload.source_id, payload.source_key)
+    local timeline = FinanceDB.fetchCaseTimeline(payload.source_type, payload.source_id, payload.source_key)
+    local caseDetail = nil
+    if payload.source_type == Config.RecordTypes.taxes then
+        caseDetail = FinanceDB.fetchSinglePrivateTax(payload.source_id)
+    elseif payload.source_type == Config.RecordTypes.taxes_business and payload.source_key then
+        local job, period = payload.source_key:match('^(.-)|(.+)$')
+        if job and period then
+            caseDetail = FinanceDB.fetchSingleBusinessTax(job, period)
+        end
+    elseif payload.source_type == Config.RecordTypes.business then
+        caseDetail = FinanceDB.fetchBusinessById(payload.source_key or payload.source_id)
+    end
+
     payload.created_by = identifier
-    payload.snapshot_json = { timeline = detail, created_at = os.date('%Y-%m-%d %H:%M:%S') }
+    payload.snapshot_json = {
+        timeline = timeline,
+        case_detail = caseDetail,
+        created_at = os.date('%Y-%m-%d %H:%M:%S'),
+        risk_band = payload.risk_band,
+        risk_score = payload.risk_score
+    }
     local id = FinanceDB.createCaseHandoff(payload)
     FinanceReviews.addAudit(payload.source_type, payload.source_id, payload.source_key, 'case_handoff_created', identifier, { handoff_id = id, target_case_id = payload.target_case_id })
     return id
@@ -426,6 +447,28 @@ lib.callback.register('doj_finance_suite:server:createDocument', function(source
     assertAccess(source)
     local actor = getPlayer(source)
     payload.created_by = actor and actor.getIdentifier and actor.getIdentifier() or 'system'
+    local templates = {
+        zahlungsaufforderung = 'Sehr geehrte/r {name}, bitte begleichen Sie den offenen Betrag bis {due_date}.',
+        erinnerung = 'Erinnerung: Ihre offene Forderung ist weiterhin unbeglichen. Frist: {due_date}.',
+        mahnung = 'Mahnung: Bitte zahlen Sie unverzüglich. Letzte bekannte Frist: {due_date}.',
+        letzte_frist = 'Letzte Fristsetzung bis {due_date}. Danach wird Vollstreckung empfohlen.',
+        ratenzahlungsvereinbarung = 'Ratenvereinbarung für {name}: Bitte zahlen Sie die vereinbarten Raten fristgerecht.',
+        pruefankuendigung = 'Prüfankündigung: Für den Fall {source_key} wurde eine finanzielle Nachprüfung eingeleitet.',
+        uebergabevermerk_doj = 'Übergabevermerk: Der Fall wurde an DOJ übergeben/verknüpft.',
+        abschlussvermerk = 'Abschlussvermerk: Der Fall wurde bearbeitet und abgeschlossen.'
+    }
+    local template = templates[payload.doc_type] or 'Amtlicher Bescheid.'
+    local dueDate = payload.due_date or '-'
+    local subjectName = payload.subject_name or payload.subject_identifier or 'Betroffene Partei'
+    if not payload.body or payload.body == '' then
+        payload.body = template:gsub('{name}', subjectName):gsub('{due_date}', dueDate):gsub('{source_key}', tostring(payload.source_key or '-'))
+    end
+    payload.meta_json = payload.meta_json or {
+        source_type = payload.source_type,
+        source_key = payload.source_key,
+        subject_name = subjectName,
+        due_date = dueDate
+    }
     local id = FinanceDB.createDocument(payload)
     FinanceReviews.addAudit(payload.source_type, payload.source_id, payload.source_key, 'document_created', payload.created_by, { document_id = id, doc_type = payload.doc_type })
     return id
