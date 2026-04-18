@@ -32,6 +32,12 @@ Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Report
 - `okokbanking_societies`
 - `okokbanking_transactions`
 - `bossmenu_transactions` (optional)
+- `users` (optional, Personenprofiling)
+- `billing` (optional, offene Zusatzforderungen)
+- `addon_account_data` (optional, Society-Liquidität)
+- `owned_vehicles` / `vehicle_sold` (optional, Asset-Signale)
+- `vms_cityhall_wasabi_bridge_sync` (optional, Charge-/Bußgeld-Signale)
+- `doj_cases` (optional, DOJ-Verknüpfung)
 
 ## Neue Hilfstabellen
 

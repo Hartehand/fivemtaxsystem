@@ -697,6 +697,9 @@ function FinanceAnalytics.getDashboard()
     local businessRows = MySQL.query.await('SELECT job, job_label, period, amount, paid_amount, delayed_amount, late_fee_applied, is_paid, paid_date FROM taxes_business ORDER BY period DESC') or {}
     local societies = db.fetchSocieties()
     local tx90 = db.fetchTransactionsByDateRange(os.date('%Y-%m-%d', os.time() - 90 * 86400), os.date('%Y-%m-%d'))
+    local billing = db.fetchOpenBillingTotals()
+    local usersSnapshot = db.fetchUsersEconomicSnapshot()
+    local assets = db.fetchAssetSignals()
 
     local reviewRows = MySQL.query.await('SELECT source_type, source_id, source_key, status FROM doj_finance_reviews') or {}
     local reviewByTax = {}
@@ -707,9 +710,15 @@ function FinanceAnalytics.getDashboard()
     end
 
     local privateComputed = {}
+    local openPrivateCount, openPrivateAmount = 0, 0
     for _, row in ipairs(privateRows) do
         local deadline = db.fetchDeadline(Config.RecordTypes.taxes, row.id, nil)
-        privateComputed[#privateComputed + 1] = FinanceAnalytics.computePrivateTaxRow(row, deadline)
+        local computed = FinanceAnalytics.computePrivateTaxRow(row, deadline)
+        privateComputed[#privateComputed + 1] = computed
+        if computed.status ~= 'bezahlt' and computed.status ~= 'storniert' then
+            openPrivateCount = openPrivateCount + 1
+            openPrivateAmount = openPrivateAmount + FinanceUtils.safeNumber(computed.amount)
+        end
     end
 
     local privateRisk = FinanceAnalytics.computePrivateRisk(privateComputed, reviewByTax)
@@ -723,6 +732,7 @@ function FinanceAnalytics.getDashboard()
 
     local businessSummary = {}
     local frequentDebtors, highRiskCases = {}, {}
+    local openBusinessCount, openBusinessAmount = 0, 0
 
     for _, row in ipairs(businessRows) do
         local computed = FinanceAnalytics.computeBusinessTaxRow(row, db.fetchDeadline(Config.RecordTypes.taxes_business, nil, FinanceUtils.businessKey(row.job, row.period)))
@@ -749,6 +759,10 @@ function FinanceAnalytics.getDashboard()
         }
 
         businessSummary[key].periods[#businessSummary[key].periods + 1] = computed
+        if computed.status ~= 'bezahlt' and computed.restschuld > 0 then
+            openBusinessCount = openBusinessCount + 1
+            openBusinessAmount = openBusinessAmount + FinanceUtils.safeNumber(computed.restschuld)
+        end
     end
 
     local societiesByToken = {}
@@ -790,16 +804,135 @@ function FinanceAnalytics.getDashboard()
     table.sort(frequentDebtors, function(a, b) return (a.meta.restDebt or 0) > (b.meta.restDebt or 0) end)
     table.sort(highRiskCases, function(a, b) return (a.risk.score or 0) > (b.risk.score or 0) end)
 
+    local topPrivateDebtors = {}
+    for _, row in ipairs(privateComputed) do
+        if row.status ~= 'bezahlt' and row.status ~= 'storniert' then
+            topPrivateDebtors[#topPrivateDebtors + 1] = row
+        end
+    end
+    table.sort(topPrivateDebtors, function(a, b) return FinanceUtils.safeNumber(a.amount) > FinanceUtils.safeNumber(b.amount) end)
+
+    local personSignals = {}
+    for _, user in ipairs(usersSnapshot) do
+        local identifier = user.identifier
+        if identifier and identifier ~= '' then
+            local fullName = ((user.firstname or '') .. ' ' .. (user.lastname or '')):gsub('^%s+', ''):gsub('%s+$', '')
+            personSignals[identifier] = personSignals[identifier] or {
+                identifier = identifier,
+                name = fullName ~= '' and fullName or identifier,
+                job = user.job,
+                score = 0,
+                reasons = {}
+            }
+        end
+    end
+
+    for _, bill in ipairs(billing.top or {}) do
+        local ident = bill.identifier
+        if ident and personSignals[ident] then
+            personSignals[ident].score = personSignals[ident].score + math.min(30, math.floor(FinanceUtils.safeNumber(bill.amount) / 2000))
+            personSignals[ident].reasons[#personSignals[ident].reasons + 1] = ('Offene Rechnung: $%s'):format(FinanceUtils.formatMoney(bill.amount))
+        end
+    end
+
+    for _, vehicle in ipairs(assets.vehicles or {}) do
+        local ident = vehicle.owner
+        if ident and personSignals[ident] then
+            personSignals[ident].score = personSignals[ident].score + 2
+            if #personSignals[ident].reasons < 5 then
+                personSignals[ident].reasons[#personSignals[ident].reasons + 1] = 'Fahrzeugbesitz in Vermögensprofil'
+            end
+        end
+    end
+
+    local suspiciousPeople = {}
+    for _, profile in pairs(personSignals) do
+        if profile.score > 0 then
+            suspiciousPeople[#suspiciousPeople + 1] = profile
+        end
+    end
+    table.sort(suspiciousPeople, function(a, b) return a.score > b.score end)
+
+    local suspiciousCompanies = {}
+    for _, bundle in ipairs(highRiskCases) do
+        local addScore = 0
+        local reasons = {}
+        if bundle.meta and FinanceUtils.safeNumber(bundle.meta.restDebt) > 0 and FinanceUtils.safeNumber(bundle.society_balance) > (bundle.meta.restDebt * 1.2) then
+            addScore = addScore + 18
+            reasons[#reasons + 1] = 'Hohe Liquidität trotz Restschuld'
+        end
+        if (bundle.meta and bundle.meta.txWindows and bundle.meta.txWindows[30] and bundle.meta.txWindows[30].incoming or 0) > 50000 and (bundle.meta and bundle.meta.restDebt or 0) > 0 then
+            addScore = addScore + 12
+            reasons[#reasons + 1] = 'Hoher 30-Tage-Cashflow bei offener Steuerlast'
+        end
+        suspiciousCompanies[#suspiciousCompanies + 1] = {
+            business_id = bundle.business_id,
+            job = bundle.job,
+            job_label = bundle.job_label,
+            score = (bundle.risk and bundle.risk.score or 0) + addScore,
+            reasons = reasons
+        }
+    end
+    table.sort(suspiciousCompanies, function(a, b) return a.score > b.score end)
+
+    local upcomingDeadlines = {}
+    if db.tableExists and db.tableExists('doj_finance_deadlines') then
+        upcomingDeadlines = MySQL.query.await([[
+            SELECT source_type, source_id, source_key, due_date, reason
+            FROM doj_finance_deadlines
+            WHERE due_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 14 DAY)
+            ORDER BY due_date ASC
+            LIMIT 50
+        ]]) or {}
+    end
+
+    local unresolvedPayments = {}
+    if db.tableExists and db.tableExists('doj_finance_transaction_map') then
+        unresolvedPayments = MySQL.query.await([[
+            SELECT l.id, l.transaction_table, l.transaction_id, l.business_id, l.updated_at
+            FROM doj_finance_transaction_map l
+            WHERE l.business_id IS NULL OR l.business_id = ''
+            ORDER BY l.updated_at DESC
+            LIMIT 40
+        ]]) or {}
+    end
+
     local result = {
         private = {
             risk = privateRisk,
-            openCount = #privateComputed
+            openCount = openPrivateCount,
+            openAmount = openPrivateAmount,
+            topDebtors = { table.unpack(topPrivateDebtors, 1, math.min(10, #topPrivateDebtors)) }
         },
         business = {
             total = #businessRows,
             mappedBusinesses = #dbMaps,
             debtorCount = #frequentDebtors,
-            highRiskCount = #highRiskCases
+            highRiskCount = #highRiskCases,
+            openCount = openBusinessCount,
+            openAmount = openBusinessAmount,
+            topDebtors = { table.unpack(frequentDebtors, 1, math.min(10, #frequentDebtors)) }
+        },
+        billing = billing,
+        suspiciousPeople = { table.unpack(suspiciousPeople, 1, math.min(10, #suspiciousPeople)) },
+        suspiciousCompanies = { table.unpack(suspiciousCompanies, 1, math.min(10, #suspiciousCompanies)) },
+        worklists = {
+            today_pruefen = { table.unpack(highRiskCases, 1, math.min(10, #highRiskCases)) },
+            bald_faellig = upcomingDeadlines,
+            mahnen = (function()
+                local out = {}
+                for _, b in ipairs(frequentDebtors) do
+                    if b.meta and (b.meta.openPeriods or 0) >= 2 then out[#out + 1] = b end
+                    if #out >= 10 then break end
+                end
+                return out
+            end)(),
+            ungeklaerte_zahlung = unresolvedPayments
+        },
+        externalSignals = {
+            vehicles = #(assets.vehicles or {}),
+            cityhallCharges = #(assets.charges or {}),
+            dojCases = #(assets.dojCases or {})
         },
         frequentDebtors = frequentDebtors,
         highRiskCases = highRiskCases,

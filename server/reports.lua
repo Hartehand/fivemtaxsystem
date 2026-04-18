@@ -191,6 +191,47 @@ function FinanceReports.generate(source, reportType, payload)
         return addReport('zahlungsverhalten', 'Zahlungsverhaltensreport', actor, nil, nil, {
             anzahl = #entries
         }, entries)
+    elseif reportType == 'debtor_master_report' then
+        local dashboard = FinanceAnalytics.getDashboard()
+        local entries = {}
+        for _, p in ipairs((dashboard.private and dashboard.private.topDebtors) or {}) do
+            entries[#entries + 1] = {
+                source_type = Config.RecordTypes.taxes,
+                source_id = p.id,
+                label = ('Privat %s'):format(p.receiver_name or p.receiver),
+                amount = p.amount,
+                payload = p
+            }
+        end
+        for _, b in ipairs((dashboard.business and dashboard.business.topDebtors) or {}) do
+            entries[#entries + 1] = {
+                source_type = Config.RecordTypes.business,
+                source_key = b.business_id,
+                label = ('Business %s'):format(b.job_label or b.job or b.business_id),
+                amount = b.meta and b.meta.restDebt or 0,
+                payload = b
+            }
+        end
+        return addReport('debtor_master_report', 'Debtor Master Report', actor, nil, nil, {
+            private_open = dashboard.private and dashboard.private.openAmount or 0,
+            business_open = dashboard.business and dashboard.business.openAmount or 0,
+            billing_open = dashboard.billing and dashboard.billing.total or 0
+        }, entries)
+    elseif reportType == 'person_risk_report' then
+        local dashboard = FinanceAnalytics.getDashboard()
+        local entries = {}
+        for _, p in ipairs(dashboard.suspiciousPeople or {}) do
+            entries[#entries + 1] = {
+                source_type = 'users',
+                source_key = p.identifier,
+                label = p.name or p.identifier,
+                amount = p.score,
+                payload = p
+            }
+        end
+        return addReport('person_risk_report', 'Person Risk Report', actor, nil, nil, {
+            anzahl = #entries
+        }, entries)
     end
 
     return nil

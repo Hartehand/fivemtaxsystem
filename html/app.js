@@ -33,19 +33,35 @@ function renderDashboard() {
   post('getDashboard', {}).then(function(data) {
     var risk = (data.private && data.private.risk) || { score: 0, band: 'unauffaellig', reasons: [] };
     var high = data.highRiskCases || [];
+    var work = data.worklists || {};
+    var billing = data.billing || {};
+    var suspiciousPeople = data.suspiciousPeople || [];
 
     var rows = high.map(function(r) {
       return '<tr><td>' + (r.job_label || r.job || '-') + '</td><td>' + safe(r.risk && r.risk.score, 0) + '</td><td>' + badge(r.risk && r.risk.band) + '</td><td>' + money(r.meta && r.meta.restDebt) + '</td><td>' + ((r.risk && r.risk.reasons) ? r.risk.reasons.join(', ') : '-') + '</td></tr>';
     }).join('');
 
+    var peopleRows = suspiciousPeople.slice(0, 10).map(function(p) {
+      return '<tr><td>' + (p.name || p.identifier || '-') + '</td><td>' + safe(p.job, '-') + '</td><td>' + safe(p.score, 0) + '</td><td>' + ((p.reasons || []).join(', ') || '-') + '</td></tr>';
+    }).join('');
+
+    var workHtml = '<div class="grid">' +
+      '<div class="card"><h3>Heute prüfen</h3><div class="val">' + safe((work.heute_pruefen || []).length, 0) + '</div></div>' +
+      '<div class="card"><h3>Bald fällig (14T)</h3><div class="val">' + safe((work.bald_faellig || []).length, 0) + '</div></div>' +
+      '<div class="card"><h3>Mahnen</h3><div class="val">' + safe((work.mahnen || []).length, 0) + '</div></div>' +
+      '<div class="card"><h3>Ungeklärte Zahlungen</h3><div class="val">' + safe((work.ungeklaerte_zahlung || []).length, 0) + '</div></div>' +
+      '</div>';
+
     content.innerHTML = '<div class="grid">' +
       '<div class="card"><h3>Privatrisiko</h3><div class="val">' + safe(risk.score, 0) + '</div>' + badge(risk.band) + '</div>' +
-      '<div class="card"><h3>Business Hochrisiko</h3><div class="val">' + safe(data.business && data.business.highRiskCount, 0) + '</div></div>' +
-      '<div class="card"><h3>Häufige Schuldner</h3><div class="val">' + safe(data.business && data.business.debtorCount, 0) + '</div></div>' +
-      '<div class="card"><h3>Business-Fälle</h3><div class="val">' + safe(data.business && data.business.total, 0) + '</div></div>' +
+      '<div class="card"><h3>Offen Privat</h3><div class="val">' + safe(data.private && data.private.openCount, 0) + '</div><div class="small">' + money(data.private && data.private.openAmount) + '</div></div>' +
+      '<div class="card"><h3>Offen Business</h3><div class="val">' + safe(data.business && data.business.openCount, 0) + '</div><div class="small">' + money(data.business && data.business.openAmount) + '</div></div>' +
+      '<div class="card"><h3>Offene Billing</h3><div class="val">' + safe(billing.count, 0) + '</div><div class="small">' + money(billing.total) + '</div></div>' +
       '</div>' +
+      workHtml +
       '<div class="detail-panel">' + ((risk.reasons || []).join('\n') || 'Keine besonderen Hinweise') + '</div>' +
-      '<div class="table-wrap"><table><thead><tr><th>Unternehmen</th><th>Score</th><th>Band</th><th>Restschuld</th><th>Gründe</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+      '<div class="table-wrap"><table><thead><tr><th>Unternehmen</th><th>Score</th><th>Band</th><th>Restschuld</th><th>Gründe</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Auffällige Person</th><th>Job</th><th>Score</th><th>Trigger</th></tr></thead><tbody>' + peopleRows + '</tbody></table></div>';
   });
 }
 
@@ -131,13 +147,16 @@ function renderBusiness() {
 }
 
 function renderTransactions() {
-  content.innerHTML = '<div class="input-row"><input id="txSearch" placeholder="Suche Name/Identifier" /><input id="txFrom" placeholder="Von (YYYY-MM-DD)" /><input id="txTo" placeholder="Bis (YYYY-MM-DD)" /><select id="txType"><option value="">Alle Typen</option><option value="deposit">deposit</option><option value="withdraw">withdraw</option><option value="transfer">transfer</option></select><select id="txSource"><option value="">Alle Quellen</option><option value="okokbanking_transactions">Okokbanking</option><option value="bossmenu_transactions">Bossmenu</option></select><button id="applyTxFilter">Filter anwenden</button></div><div id="txResult"></div>';
+  content.innerHTML = '<div class="input-row"><input id="txSearch" placeholder="Suche Name/Identifier" /><input id="txEntity" placeholder="Person/Firma" /><input id="txFrom" placeholder="Von (YYYY-MM-DD)" /><input id="txTo" placeholder="Bis (YYYY-MM-DD)" /><input id="txMinAmount" placeholder="Min Betrag" /><input id="txMaxAmount" placeholder="Max Betrag" /><select id="txType"><option value="">Alle Typen</option><option value="deposit">deposit</option><option value="withdraw">withdraw</option><option value="transfer">transfer</option></select><select id="txSource"><option value="">Alle Quellen</option><option value="okokbanking_transactions">Okokbanking</option><option value="bossmenu_transactions">Bossmenu</option></select><button id="applyTxFilter">Filter anwenden</button></div><div id="txResult"></div>';
 
   function loadTransactions() {
     var filters = {
       search: (document.getElementById('txSearch') || {}).value || '',
+      entity: (document.getElementById('txEntity') || {}).value || '',
       from: (document.getElementById('txFrom') || {}).value || '',
       to: (document.getElementById('txTo') || {}).value || '',
+      min_amount: (document.getElementById('txMinAmount') || {}).value || '',
+      max_amount: (document.getElementById('txMaxAmount') || {}).value || '',
       source: (document.getElementById('txSource') || {}).value || ''
     };
 
@@ -292,7 +311,7 @@ function renderReports(selectedReportId) {
       return '<tr><td>' + r.id + '</td><td>' + r.report_type + '</td><td>' + r.title + '</td><td>' + r.created_by + '</td><td>' + r.created_at + '</td><td><button data-report="' + r.id + '">Ansehen</button></td></tr>';
     }).join('');
 
-    content.innerHTML = '<div class="input-row"><select id="reportType"><option value="schuldnerreport">schuldnerreport</option><option value="hochrisikoreport">hochrisikoreport</option><option value="transaktionsauffaelligkeit">transaktionsauffaelligkeit</option><option value="zahlungsverhalten">zahlungsverhalten</option></select><button id="createReport">Report erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Titel</th><th>Ersteller</th><th>Datum</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="reportDetail" class="detail-panel small">Wähle einen Report zum Anzeigen.</div>';
+    content.innerHTML = '<div class="input-row"><select id="reportType"><option value="schuldnerreport">schuldnerreport</option><option value="hochrisikoreport">hochrisikoreport</option><option value="transaktionsauffaelligkeit">transaktionsauffaelligkeit</option><option value="zahlungsverhalten">zahlungsverhalten</option><option value="debtor_master_report">debtor_master_report</option><option value="person_risk_report">person_risk_report</option></select><button id="createReport">Report erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Typ</th><th>Titel</th><th>Ersteller</th><th>Datum</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div><div id="reportDetail" class="detail-panel small">Wähle einen Report zum Anzeigen.</div>';
 
     var createBtn = document.getElementById('createReport');
     if (createBtn) {

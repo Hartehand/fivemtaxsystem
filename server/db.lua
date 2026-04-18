@@ -320,6 +320,8 @@ function FinanceDB.fetchTransactions(filters, page, pageSize)
     local filtered = {}
     for _, row in ipairs(seedRows) do
         local txTs = FinanceUtils.parseDate(row.date)
+        local txValue = math.abs(FinanceUtils.safeNumber(row.value))
+        local joined = FinanceUtils.normalizeToken((row.sender_name or '') .. ' ' .. (row.receiver_name or '') .. ' ' .. (row.sender_identifier or '') .. ' ' .. (row.receiver_identifier or '') .. ' ' .. (row.business_job or ''))
         local valid = true
         if filters.source and filters.source ~= '' and row.source_table ~= filters.source then
             valid = false
@@ -327,6 +329,9 @@ function FinanceDB.fetchTransactions(filters, page, pageSize)
         if fromTs and txTs and txTs < fromTs then valid = false end
         if toTs and txTs and txTs > toTs then valid = false end
         if (fromTs or toTs) and not txTs then valid = false end
+        if filters.min_amount and filters.min_amount ~= '' and txValue < FinanceUtils.safeNumber(filters.min_amount) then valid = false end
+        if filters.max_amount and filters.max_amount ~= '' and txValue > FinanceUtils.safeNumber(filters.max_amount) then valid = false end
+        if filters.entity and filters.entity ~= '' and joined:find(FinanceUtils.normalizeToken(filters.entity), 1, true) == nil then valid = false end
         if valid then filtered[#filtered + 1] = row end
     end
 
@@ -347,6 +352,66 @@ function FinanceDB.fetchTransactions(filters, page, pageSize)
     end
 
     return rows, count
+end
+
+function FinanceDB.fetchOpenBillingTotals()
+    if not FinanceDB.tableExists('billing') then
+        return { total = 0, count = 0, top = {} }
+    end
+
+    local rows = MySQL.query.await([[
+        SELECT identifier, sender, target_type, target, label, amount
+        FROM billing
+        ORDER BY amount DESC
+        LIMIT 300
+    ]]) or {}
+
+    local total = 0
+    local top = {}
+    for i, row in ipairs(rows) do
+        local amount = FinanceUtils.safeNumber(row.amount)
+        total = total + amount
+        if i <= 10 then
+            top[#top + 1] = row
+        end
+    end
+
+    return { total = total, count = #rows, top = top }
+end
+
+function FinanceDB.fetchUsersEconomicSnapshot()
+    if not FinanceDB.tableExists('users') then
+        return {}
+    end
+
+    return MySQL.query.await([[
+        SELECT identifier, iban, job, firstname, lastname, accounts, cityhall_data, metadata, created_at, last_seen
+        FROM users
+        ORDER BY last_seen DESC
+        LIMIT 1200
+    ]]) or {}
+end
+
+function FinanceDB.fetchAssetSignals()
+    local out = { vehicles = {}, sold = {}, societyAccounts = {}, charges = {}, dojCases = {} }
+
+    if FinanceDB.tableExists('owned_vehicles') then
+        out.vehicles = MySQL.query.await('SELECT owner, owner_name, company, vehicle, plate, parking_date FROM owned_vehicles ORDER BY parking_date DESC LIMIT 1500') or {}
+    end
+    if FinanceDB.tableExists('vehicle_sold') then
+        out.sold = MySQL.query.await('SELECT client, model, plate, soldby, date FROM vehicle_sold ORDER BY id DESC LIMIT 1200') or {}
+    end
+    if FinanceDB.tableExists('addon_account_data') then
+        out.societyAccounts = MySQL.query.await('SELECT account_name, money, owner FROM addon_account_data ORDER BY money DESC LIMIT 600') or {}
+    end
+    if FinanceDB.tableExists('vms_cityhall_wasabi_bridge_sync') then
+        out.charges = MySQL.query.await('SELECT target_identifier, target_name, officer_identifier, officer_name, status, created_at FROM vms_cityhall_wasabi_bridge_sync ORDER BY id DESC LIMIT 1000') or {}
+    end
+    if FinanceDB.tableExists('doj_cases') then
+        out.dojCases = MySQL.query.await('SELECT id, case_number, status, priority, lead_identifier, lead_name, created_at, updated_at FROM doj_cases ORDER BY id DESC LIMIT 1000') or {}
+    end
+
+    return out
 end
 
 function FinanceDB.fetchTransactionAssignments(transactionRefs)

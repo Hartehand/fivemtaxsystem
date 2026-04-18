@@ -143,3 +143,24 @@ CREATE TABLE IF NOT EXISTS `doj_finance_transaction_map` (
   UNIQUE KEY `uniq_tx_map` (`transaction_table`, `transaction_id`),
   KEY `idx_business_id` (`business_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+ALTER TABLE `doj_finance_reviews`
+  ADD COLUMN IF NOT EXISTS `priority` VARCHAR(24) NULL AFTER `status`,
+  ADD COLUMN IF NOT EXISTS `evidence` LONGTEXT NULL AFTER `assigned_to`,
+  ADD COLUMN IF NOT EXISTS `doj_case_id` BIGINT NULL AFTER `evidence`;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_case_links` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `review_id` BIGINT UNSIGNED NOT NULL,
+  `doj_case_id` BIGINT NULL,
+  `doj_case_number` VARCHAR(64) NULL,
+  `link_type` VARCHAR(32) NOT NULL DEFAULT 'related',
+  `created_by` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_review_id` (`review_id`),
+  KEY `idx_doj_case_id` (`doj_case_id`),
+  CONSTRAINT `fk_finance_case_link_review`
+    FOREIGN KEY (`review_id`) REFERENCES `doj_finance_reviews` (`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
