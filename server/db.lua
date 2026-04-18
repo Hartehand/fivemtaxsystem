@@ -474,6 +474,140 @@ function FinanceDB.upsertTransactionAssignment(payload)
     })
 end
 
+function FinanceDB.listEnforcement(filters)
+    if not FinanceDB.tableExists('doj_finance_enforcement') then
+        return {}, 0
+    end
+    filters = filters or {}
+    local clauses, params = { '1=1' }, {}
+    if filters.status and filters.status ~= '' then
+        clauses[#clauses + 1] = 'status = ?'
+        params[#params + 1] = filters.status
+    end
+    local where = table.concat(clauses, ' AND ')
+    local _, limit, offset = FinanceUtils.clampPage(filters.page, filters.pageSize)
+    local count = MySQL.scalar.await(('SELECT COUNT(*) FROM doj_finance_enforcement WHERE %s'):format(where), params) or 0
+    params[#params + 1] = limit
+    params[#params + 1] = offset
+    local rows = MySQL.query.await(('SELECT * FROM doj_finance_enforcement WHERE %s ORDER BY updated_at DESC LIMIT ? OFFSET ?'):format(where), params) or {}
+    return rows, count
+end
+
+function FinanceDB.upsertEnforcement(payload)
+    if not FinanceDB.tableExists('doj_finance_enforcement') then return nil end
+    local id = payload.id
+    if id then
+        MySQL.update.await([[
+            UPDATE doj_finance_enforcement
+            SET status = ?, reason = ?, next_due_date = ?, last_contact_at = ?, last_action_at = NOW(), set_by = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ]], { payload.status, payload.reason, payload.next_due_date, payload.last_contact_at, payload.set_by, id })
+        return id
+    end
+    return MySQL.insert.await([[
+        INSERT INTO doj_finance_enforcement (source_type, source_id, source_key, subject_type, subject_identifier, status, reason, next_due_date, last_contact_at, last_action_at, set_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
+    ]], { payload.source_type, payload.source_id, payload.source_key, payload.subject_type, payload.subject_identifier, payload.status, payload.reason, payload.next_due_date, payload.last_contact_at, payload.set_by })
+end
+
+function FinanceDB.addEnforcementEvent(enforcementId, oldStatus, newStatus, note, changedBy)
+    if not FinanceDB.tableExists('doj_finance_enforcement_events') then return nil end
+    return MySQL.insert.await('INSERT INTO doj_finance_enforcement_events (enforcement_id, old_status, new_status, note, changed_by) VALUES (?, ?, ?, ?, ?)', {
+        enforcementId, oldStatus, newStatus, note, changedBy
+    })
+end
+
+function FinanceDB.listInstallmentPlans(filters)
+    if not FinanceDB.tableExists('doj_finance_installment_plans') then return {}, 0 end
+    filters = filters or {}
+    local clauses, params = { '1=1' }, {}
+    if filters.status and filters.status ~= '' then
+        clauses[#clauses + 1] = 'status = ?'
+        params[#params + 1] = filters.status
+    end
+    local where = table.concat(clauses, ' AND ')
+    local _, limit, offset = FinanceUtils.clampPage(filters.page, filters.pageSize)
+    local count = MySQL.scalar.await(('SELECT COUNT(*) FROM doj_finance_installment_plans WHERE %s'):format(where), params) or 0
+    params[#params + 1] = limit
+    params[#params + 1] = offset
+    local rows = MySQL.query.await(('SELECT * FROM doj_finance_installment_plans WHERE %s ORDER BY updated_at DESC LIMIT ? OFFSET ?'):format(where), params) or {}
+    return rows, count
+end
+
+function FinanceDB.createInstallmentPlan(payload)
+    if not FinanceDB.tableExists('doj_finance_installment_plans') then return nil end
+    local planId = MySQL.insert.await([[
+        INSERT INTO doj_finance_installment_plans (source_type, source_id, source_key, subject_identifier, total_amount, down_payment, installment_count, installment_amount, start_date, next_due_date, status, internal_note, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]], {
+        payload.source_type, payload.source_id, payload.source_key, payload.subject_identifier, payload.total_amount, payload.down_payment, payload.installment_count, payload.installment_amount, payload.start_date, payload.next_due_date, payload.status or 'aktiv', payload.internal_note, payload.created_by
+    })
+    if planId and FinanceDB.tableExists('doj_finance_installment_entries') then
+        local baseTs = FinanceUtils.parseDate(payload.start_date) or os.time()
+        for i = 1, math.max(1, tonumber(payload.installment_count) or 1) do
+            local dueTs = baseTs + ((i - 1) * 30 * 86400)
+            MySQL.insert.await('INSERT INTO doj_finance_installment_entries (plan_id, entry_no, due_date, amount, status) VALUES (?, ?, ?, ?, ?)', {
+                planId, i, os.date('%Y-%m-%d', dueTs), payload.installment_amount, 'offen'
+            })
+        end
+    end
+    return planId
+end
+
+function FinanceDB.markInstallmentEntryPaid(entryId, paidAmount)
+    if not FinanceDB.tableExists('doj_finance_installment_entries') then return false end
+    local entry = MySQL.single.await('SELECT id, plan_id, amount FROM doj_finance_installment_entries WHERE id = ?', { entryId })
+    if not entry then return false end
+    MySQL.update.await('UPDATE doj_finance_installment_entries SET paid_amount = ?, paid_at = NOW(), status = ? WHERE id = ?', {
+        paidAmount or entry.amount, 'bezahlt', entryId
+    })
+    local remaining = MySQL.scalar.await("SELECT COUNT(*) FROM doj_finance_installment_entries WHERE plan_id = ? AND status <> 'bezahlt'", { entry.plan_id }) or 0
+    MySQL.update.await('UPDATE doj_finance_installment_plans SET status = ?, next_due_date = (SELECT MIN(due_date) FROM doj_finance_installment_entries WHERE plan_id = ? AND status <> \'bezahlt\') WHERE id = ?', {
+        remaining == 0 and 'erfüllt' or 'aktiv', entry.plan_id, entry.plan_id
+    })
+    return true
+end
+
+function FinanceDB.listCaseHandoffs(filters)
+    if not FinanceDB.tableExists('doj_finance_case_handoffs') then return {}, 0 end
+    filters = filters or {}
+    local _, limit, offset = FinanceUtils.clampPage(filters.page, filters.pageSize)
+    local count = MySQL.scalar.await('SELECT COUNT(*) FROM doj_finance_case_handoffs') or 0
+    local rows = MySQL.query.await('SELECT * FROM doj_finance_case_handoffs ORDER BY id DESC LIMIT ? OFFSET ?', { limit, offset }) or {}
+    return rows, count
+end
+
+function FinanceDB.createCaseHandoff(payload)
+    if not FinanceDB.tableExists('doj_finance_case_handoffs') then return nil end
+    return MySQL.insert.await([[
+        INSERT INTO doj_finance_case_handoffs (source_type, source_id, source_key, target_case_id, target_case_number, status, risk_band, risk_score, note, snapshot_json, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]], { payload.source_type, payload.source_id, payload.source_key, payload.target_case_id, payload.target_case_number, payload.status or 'vorbereitet', payload.risk_band, payload.risk_score, payload.note, json.encode(payload.snapshot_json or {}), payload.created_by })
+end
+
+function FinanceDB.listDocuments(filters)
+    if not FinanceDB.tableExists('doj_finance_documents') then return {}, 0 end
+    filters = filters or {}
+    local clauses, params = { '1=1' }, {}
+    if filters.type and filters.type ~= '' then clauses[#clauses + 1] = 'doc_type = ?'; params[#params + 1] = filters.type end
+    local where = table.concat(clauses, ' AND ')
+    local _, limit, offset = FinanceUtils.clampPage(filters.page, filters.pageSize)
+    local count = MySQL.scalar.await(('SELECT COUNT(*) FROM doj_finance_documents WHERE %s'):format(where), params) or 0
+    params[#params + 1] = limit
+    params[#params + 1] = offset
+    local rows = MySQL.query.await(('SELECT * FROM doj_finance_documents WHERE %s ORDER BY id DESC LIMIT ? OFFSET ?'):format(where), params) or {}
+    return rows, count
+end
+
+function FinanceDB.createDocument(payload)
+    if not FinanceDB.tableExists('doj_finance_documents') then return nil end
+    local docNo = ('DOC-%s-%s'):format(os.date('%Y%m%d'), math.random(100000, 999999))
+    return MySQL.insert.await([[
+        INSERT INTO doj_finance_documents (doc_no, doc_type, source_type, source_id, source_key, subject_identifier, subject_name, status, due_date, subject, body, meta_json, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]], { docNo, payload.doc_type, payload.source_type, payload.source_id, payload.source_key, payload.subject_identifier, payload.subject_name, payload.status or 'erstellt', payload.due_date, payload.subject, payload.body, json.encode(payload.meta_json or {}), payload.created_by })
+end
+
 function FinanceDB.fetchTransactionsByDateRange(fromDate, toDate)
     local rows = MySQL.query.await([[
         SELECT id, receiver_identifier, receiver_name, sender_identifier, sender_name, date, value, type

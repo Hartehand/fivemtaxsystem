@@ -165,3 +165,131 @@ CREATE TABLE IF NOT EXISTS `doj_finance_case_links` (
     FOREIGN KEY (`review_id`) REFERENCES `doj_finance_reviews` (`id`)
     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_enforcement` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `source_type` VARCHAR(64) NOT NULL,
+  `source_id` BIGINT NULL,
+  `source_key` VARCHAR(191) NULL,
+  `subject_type` VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  `subject_identifier` VARCHAR(100) NULL,
+  `status` VARCHAR(32) NOT NULL DEFAULT 'offen',
+  `reason` TEXT NULL,
+  `next_due_date` DATE NULL,
+  `last_contact_at` DATETIME NULL,
+  `last_action_at` DATETIME NULL,
+  `set_by` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_source` (`source_type`, `source_id`, `source_key`),
+  KEY `idx_status_due` (`status`, `next_due_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_enforcement_events` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `enforcement_id` BIGINT UNSIGNED NOT NULL,
+  `old_status` VARCHAR(32) NULL,
+  `new_status` VARCHAR(32) NOT NULL,
+  `note` TEXT NULL,
+  `changed_by` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_enforcement_id` (`enforcement_id`),
+  CONSTRAINT `fk_finance_enforcement_events`
+    FOREIGN KEY (`enforcement_id`) REFERENCES `doj_finance_enforcement` (`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_installment_plans` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `source_type` VARCHAR(64) NOT NULL,
+  `source_id` BIGINT NULL,
+  `source_key` VARCHAR(191) NULL,
+  `subject_identifier` VARCHAR(100) NULL,
+  `total_amount` DECIMAL(18,2) NOT NULL DEFAULT 0,
+  `down_payment` DECIMAL(18,2) NOT NULL DEFAULT 0,
+  `installment_count` INT NOT NULL DEFAULT 1,
+  `installment_amount` DECIMAL(18,2) NOT NULL DEFAULT 0,
+  `start_date` DATE NULL,
+  `next_due_date` DATE NULL,
+  `status` VARCHAR(32) NOT NULL DEFAULT 'aktiv',
+  `internal_note` TEXT NULL,
+  `created_by` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_plan_source` (`source_type`, `source_id`, `source_key`),
+  KEY `idx_plan_status_due` (`status`, `next_due_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_installment_entries` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `plan_id` BIGINT UNSIGNED NOT NULL,
+  `entry_no` INT NOT NULL,
+  `due_date` DATE NOT NULL,
+  `amount` DECIMAL(18,2) NOT NULL DEFAULT 0,
+  `paid_amount` DECIMAL(18,2) NOT NULL DEFAULT 0,
+  `paid_at` DATETIME NULL,
+  `status` VARCHAR(32) NOT NULL DEFAULT 'offen',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_plan_due` (`plan_id`, `due_date`),
+  CONSTRAINT `fk_finance_installment_entries`
+    FOREIGN KEY (`plan_id`) REFERENCES `doj_finance_installment_plans` (`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_case_handoffs` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `source_type` VARCHAR(64) NOT NULL,
+  `source_id` BIGINT NULL,
+  `source_key` VARCHAR(191) NULL,
+  `target_case_id` BIGINT NULL,
+  `target_case_number` VARCHAR(64) NULL,
+  `status` VARCHAR(32) NOT NULL DEFAULT 'vorbereitet',
+  `risk_band` VARCHAR(32) NULL,
+  `risk_score` INT NULL,
+  `note` TEXT NULL,
+  `snapshot_json` LONGTEXT NULL,
+  `created_by` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_handoff_source` (`source_type`, `source_id`, `source_key`),
+  KEY `idx_handoff_case` (`target_case_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_documents` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `doc_no` VARCHAR(64) NOT NULL,
+  `doc_type` VARCHAR(64) NOT NULL,
+  `source_type` VARCHAR(64) NULL,
+  `source_id` BIGINT NULL,
+  `source_key` VARCHAR(191) NULL,
+  `subject_identifier` VARCHAR(100) NULL,
+  `subject_name` VARCHAR(191) NULL,
+  `status` VARCHAR(32) NOT NULL DEFAULT 'entwurf',
+  `due_date` DATE NULL,
+  `subject` VARCHAR(255) NOT NULL,
+  `body` LONGTEXT NOT NULL,
+  `meta_json` LONGTEXT NULL,
+  `created_by` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_doc_no` (`doc_no`),
+  KEY `idx_doc_source` (`source_type`, `source_id`, `source_key`),
+  KEY `idx_doc_type_status` (`doc_type`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_document_templates` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `template_key` VARCHAR(64) NOT NULL,
+  `title` VARCHAR(191) NOT NULL,
+  `body_template` LONGTEXT NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_template_key` (`template_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

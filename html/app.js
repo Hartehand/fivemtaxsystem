@@ -398,6 +398,127 @@ function renderReports(selectedReportId) {
   });
 }
 
+function renderEnforcement() {
+  post('listEnforcement', { filters: { page: 1, pageSize: 80 } }).then(function(data) {
+    var rows = (data.rows || []).map(function(r) {
+      return '<tr><td>' + r.id + '</td><td>' + (r.source_type || '-') + '</td><td>' + (r.source_key || r.source_id || '-') + '</td><td>' + (r.status || '-') + '</td><td>' + (r.next_due_date || '-') + '</td><td>' + (r.reason || '-') + '</td></tr>';
+    }).join('');
+    content.innerHTML = '<div class="input-row"><input id="enfSourceType" placeholder="source_type" value="taxes_business" /><input id="enfSourceKey" placeholder="source_key" /><select id="enfStatus"><option value="offen">offen</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="vollstreckung_empfohlen">vollstreckung_empfohlen</option><option value="erledigt">erledigt</option><option value="ausgesetzt">ausgesetzt</option></select><input id="enfDue" placeholder="next_due_date YYYY-MM-DD" /><input id="enfReason" placeholder="Begründung" /><button id="saveEnforcement">Speichern</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>Status</th><th>Nächste Frist</th><th>Grund</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var btn = document.getElementById('saveEnforcement');
+    if (btn) {
+      btn.addEventListener('click', function() {
+        post('upsertEnforcement', {
+          source_type: (document.getElementById('enfSourceType') || {}).value || '',
+          source_id: null,
+          source_key: (document.getElementById('enfSourceKey') || {}).value || '',
+          subject_type: 'case',
+          subject_identifier: (document.getElementById('enfSourceKey') || {}).value || '',
+          status: (document.getElementById('enfStatus') || {}).value || 'offen',
+          next_due_date: (document.getElementById('enfDue') || {}).value || null,
+          reason: (document.getElementById('enfReason') || {}).value || ''
+        }).then(function() { renderEnforcement(); });
+      });
+    }
+  });
+}
+
+function renderInstallments() {
+  post('listInstallmentPlans', { filters: { page: 1, pageSize: 80 } }).then(function(data) {
+    var rows = (data.rows || []).map(function(r) {
+      return '<tr><td>' + r.id + '</td><td>' + (r.source_type || '-') + '</td><td>' + (r.source_key || '-') + '</td><td>' + money(r.total_amount) + '</td><td>' + safe(r.installment_count, 0) + '</td><td>' + money(r.installment_amount) + '</td><td>' + (r.status || '-') + '</td><td>' + (r.next_due_date || '-') + '</td></tr>';
+    }).join('');
+    content.innerHTML = '<div class="input-row"><input id="plSourceType" placeholder="source_type" value="taxes_business" /><input id="plSourceKey" placeholder="source_key" /><input id="plTotal" placeholder="Gesamtschuld" /><input id="plDown" placeholder="Anzahlung" /><input id="plCount" placeholder="Ratenanzahl" /><input id="plAmount" placeholder="Ratenhöhe" /><input id="plStart" placeholder="Start YYYY-MM-DD" /><button id="savePlan">Plan erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>Gesamt</th><th>Raten</th><th>Rate</th><th>Status</th><th>Nächste Fälligkeit</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var btn = document.getElementById('savePlan');
+    if (btn) {
+      btn.addEventListener('click', function() {
+        post('createInstallmentPlan', {
+          source_type: (document.getElementById('plSourceType') || {}).value || '',
+          source_id: null,
+          source_key: (document.getElementById('plSourceKey') || {}).value || '',
+          total_amount: Number((document.getElementById('plTotal') || {}).value || 0),
+          down_payment: Number((document.getElementById('plDown') || {}).value || 0),
+          installment_count: Number((document.getElementById('plCount') || {}).value || 1),
+          installment_amount: Number((document.getElementById('plAmount') || {}).value || 0),
+          start_date: (document.getElementById('plStart') || {}).value || '',
+          next_due_date: (document.getElementById('plStart') || {}).value || '',
+          status: 'aktiv'
+        }).then(function() { renderInstallments(); });
+      });
+    }
+  });
+}
+
+function renderHandoffs() {
+  post('listCaseHandoffs', { filters: { page: 1, pageSize: 80 } }).then(function(data) {
+    var rows = (data.rows || []).map(function(r) {
+      return '<tr><td>' + r.id + '</td><td>' + (r.source_type || '-') + '</td><td>' + (r.source_key || '-') + '</td><td>' + (r.target_case_number || r.target_case_id || '-') + '</td><td>' + (r.risk_band || '-') + '</td><td>' + safe(r.risk_score, 0) + '</td><td>' + (r.status || '-') + '</td></tr>';
+    }).join('');
+    content.innerHTML = '<div class="input-row"><input id="hoSourceType" placeholder="source_type" value="taxes_business" /><input id="hoSourceKey" placeholder="source_key" /><input id="hoCaseId" placeholder="target_case_id" /><input id="hoCaseNo" placeholder="target_case_number" /><input id="hoRiskBand" placeholder="risk_band" /><input id="hoRiskScore" placeholder="risk_score" /><input id="hoNote" placeholder="Bearbeiternotiz" /><button id="saveHandoff">Handoff erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>DOJ Case</th><th>Band</th><th>Score</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var btn = document.getElementById('saveHandoff');
+    if (btn) btn.addEventListener('click', function() {
+      post('createCaseHandoff', {
+        source_type: (document.getElementById('hoSourceType') || {}).value || '',
+        source_id: null,
+        source_key: (document.getElementById('hoSourceKey') || {}).value || '',
+        target_case_id: Number((document.getElementById('hoCaseId') || {}).value || 0) || null,
+        target_case_number: (document.getElementById('hoCaseNo') || {}).value || null,
+        risk_band: (document.getElementById('hoRiskBand') || {}).value || null,
+        risk_score: Number((document.getElementById('hoRiskScore') || {}).value || 0) || null,
+        note: (document.getElementById('hoNote') || {}).value || ''
+      }).then(function() { renderHandoffs(); });
+    });
+  });
+}
+
+function renderNetwork() {
+  content.innerHTML = '<div class="input-row"><input id="nwBusinessId" placeholder="business_id" /><button id="loadNetwork">Netzwerk laden</button></div><div id="networkPanel" class="detail-panel small">Business-ID eingeben.</div>';
+  var btn = document.getElementById('loadNetwork');
+  if (btn) btn.addEventListener('click', function() {
+    var businessId = (document.getElementById('nwBusinessId') || {}).value || '';
+    if (!businessId) return;
+    post('getNetworkProfile', { business_id: businessId }).then(function(data) {
+      var panel = document.getElementById('networkPanel');
+      if (!panel) return;
+      if (!data || !data.business) {
+        panel.textContent = 'Kein Netzwerkprofil gefunden.';
+        return;
+      }
+      var lines = [];
+      lines.push('Business: ' + (data.business.id || '-'));
+      lines.push('Owners: ' + (data.owners || []).join(', '));
+      lines.push('Employees: ' + (data.employees || []).slice(0, 20).join(', '));
+      lines.push('Users: ' + safe((data.users || []).length, 0));
+      lines.push('Vehicles: ' + safe((data.vehicles || []).length, 0));
+      lines.push('DOJ Cases: ' + safe((data.doj_cases || []).length, 0));
+      lines.push('Societies: ' + safe((data.societies || []).length, 0));
+      panel.textContent = lines.join('\n');
+    });
+  });
+}
+
+function renderDocuments() {
+  post('listDocuments', { filters: { page: 1, pageSize: 100 } }).then(function(data) {
+    var rows = (data.rows || []).map(function(d) {
+      return '<tr><td>' + d.doc_no + '</td><td>' + d.doc_type + '</td><td>' + (d.subject_name || d.subject_identifier || '-') + '</td><td>' + d.subject + '</td><td>' + (d.status || '-') + '</td><td>' + (d.due_date || '-') + '</td></tr>';
+    }).join('');
+    content.innerHTML = '<div class="input-row"><select id="docType"><option value="zahlungsaufforderung">zahlungsaufforderung</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="ratenzahlungsvereinbarung">ratenzahlungsvereinbarung</option><option value="pruefankuendigung">pruefankuendigung</option><option value="uebergabevermerk_doj">uebergabevermerk_doj</option><option value="abschlussvermerk">abschlussvermerk</option></select><input id="docSourceType" placeholder="source_type" /><input id="docSourceKey" placeholder="source_key" /><input id="docSubjectName" placeholder="Betroffene Person/Firma" /><input id="docSubject" placeholder="Betreff" /><input id="docDue" placeholder="Frist YYYY-MM-DD" /><input id="docBody" placeholder="Inhalt" /><button id="createDoc">Dokument erstellen</button></div><div class="table-wrap"><table><thead><tr><th>Doc-No</th><th>Typ</th><th>Betroffen</th><th>Betreff</th><th>Status</th><th>Frist</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var btn = document.getElementById('createDoc');
+    if (btn) btn.addEventListener('click', function() {
+      post('createDocument', {
+        doc_type: (document.getElementById('docType') || {}).value || 'zahlungsaufforderung',
+        source_type: (document.getElementById('docSourceType') || {}).value || '',
+        source_id: null,
+        source_key: (document.getElementById('docSourceKey') || {}).value || '',
+        subject_name: (document.getElementById('docSubjectName') || {}).value || '',
+        subject: (document.getElementById('docSubject') || {}).value || 'Finanzbescheid',
+        due_date: (document.getElementById('docDue') || {}).value || null,
+        body: (document.getElementById('docBody') || {}).value || 'Amtlicher Bescheid',
+        status: 'erstellt'
+      }).then(function() { renderDocuments(); });
+    });
+  });
+}
+
 function renderMapping() {
   post('getBusinessMaps', {}).then(function(maps) {
     var rows = (maps.rows || []).map(function(m) {
@@ -426,6 +547,11 @@ function render() {
   if (state.tab === 'business') return renderBusiness();
   if (state.tab === 'companies') return renderCompanies();
   if (state.tab === 'transactions') return renderTransactions();
+  if (state.tab === 'enforcement') return renderEnforcement();
+  if (state.tab === 'installments') return renderInstallments();
+  if (state.tab === 'handoffs') return renderHandoffs();
+  if (state.tab === 'network') return renderNetwork();
+  if (state.tab === 'documents') return renderDocuments();
   if (state.tab === 'reports') return renderReports();
   if (state.tab === 'mapping') return renderMapping();
 }

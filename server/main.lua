@@ -354,6 +354,88 @@ lib.callback.register('doj_finance_suite:server:createReport', function(source, 
     return FinanceReports.generate(source, reportType, payload)
 end)
 
+lib.callback.register('doj_finance_suite:server:listEnforcement', function(source, filters)
+    assertAccess(source)
+    return FinanceDB.listEnforcement(filters)
+end)
+
+lib.callback.register('doj_finance_suite:server:upsertEnforcement', function(source, payload)
+    assertAccess(source)
+    local actor = getPlayer(source)
+    local identifier = actor and actor.getIdentifier and actor.getIdentifier() or 'system'
+    local previous = payload.id and MySQL.single.await('SELECT status FROM doj_finance_enforcement WHERE id = ?', { payload.id }) or nil
+    payload.set_by = identifier
+    local id = FinanceDB.upsertEnforcement(payload)
+    if id then
+        FinanceDB.addEnforcementEvent(id, previous and previous.status or nil, payload.status, payload.reason, identifier)
+        FinanceReviews.addAudit(payload.source_type, payload.source_id, payload.source_key, 'enforcement_updated', identifier, {
+            enforcement_id = id,
+            status = payload.status
+        })
+    end
+    return id
+end)
+
+lib.callback.register('doj_finance_suite:server:listInstallmentPlans', function(source, filters)
+    assertAccess(source)
+    return FinanceDB.listInstallmentPlans(filters)
+end)
+
+lib.callback.register('doj_finance_suite:server:createInstallmentPlan', function(source, payload)
+    assertAccess(source)
+    local actor = getPlayer(source)
+    payload.created_by = actor and actor.getIdentifier and actor.getIdentifier() or 'system'
+    local id = FinanceDB.createInstallmentPlan(payload)
+    FinanceReviews.addAudit(payload.source_type, payload.source_id, payload.source_key, 'installment_created', payload.created_by, { plan_id = id })
+    return id
+end)
+
+lib.callback.register('doj_finance_suite:server:markInstallmentEntryPaid', function(source, entryId, sourceType, sourceId, sourceKey)
+    assertAccess(source)
+    local ok = FinanceDB.markInstallmentEntryPaid(entryId)
+    if ok then
+        local actor = getPlayer(source)
+        FinanceReviews.addAudit(sourceType, sourceId, sourceKey, 'installment_entry_paid', actor and actor.getIdentifier and actor.getIdentifier() or 'system', { entry_id = entryId })
+    end
+    return ok
+end)
+
+lib.callback.register('doj_finance_suite:server:listCaseHandoffs', function(source, filters)
+    assertAccess(source)
+    return FinanceDB.listCaseHandoffs(filters)
+end)
+
+lib.callback.register('doj_finance_suite:server:createCaseHandoff', function(source, payload)
+    assertAccess(source)
+    local actor = getPlayer(source)
+    local identifier = actor and actor.getIdentifier and actor.getIdentifier() or 'system'
+    local detail = FinanceDB.fetchCaseTimeline(payload.source_type, payload.source_id, payload.source_key)
+    payload.created_by = identifier
+    payload.snapshot_json = { timeline = detail, created_at = os.date('%Y-%m-%d %H:%M:%S') }
+    local id = FinanceDB.createCaseHandoff(payload)
+    FinanceReviews.addAudit(payload.source_type, payload.source_id, payload.source_key, 'case_handoff_created', identifier, { handoff_id = id, target_case_id = payload.target_case_id })
+    return id
+end)
+
+lib.callback.register('doj_finance_suite:server:listDocuments', function(source, filters)
+    assertAccess(source)
+    return FinanceDB.listDocuments(filters)
+end)
+
+lib.callback.register('doj_finance_suite:server:createDocument', function(source, payload)
+    assertAccess(source)
+    local actor = getPlayer(source)
+    payload.created_by = actor and actor.getIdentifier and actor.getIdentifier() or 'system'
+    local id = FinanceDB.createDocument(payload)
+    FinanceReviews.addAudit(payload.source_type, payload.source_id, payload.source_key, 'document_created', payload.created_by, { document_id = id, doc_type = payload.doc_type })
+    return id
+end)
+
+lib.callback.register('doj_finance_suite:server:getNetworkProfile', function(source, businessId)
+    assertAccess(source)
+    return FinanceDB.fetchBusinessLinkProfile(businessId)
+end)
+
 local function openFinance(source)
     dprint(('openFinance requested by source %s'):format(source))
     if not hasAccess(source) then

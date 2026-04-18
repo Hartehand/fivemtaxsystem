@@ -201,6 +201,56 @@ RegisterNUICallback('assignTransactionBusiness', function(payload, cb)
     cb({ ok = ok and true or false })
 end)
 
+RegisterNUICallback('listEnforcement', function(payload, cb)
+    local rows, count = lib.callback.await('doj_finance_suite:server:listEnforcement', false, payload and payload.filters or { page = 1, pageSize = 50 })
+    cb({ rows = rows or {}, count = count or 0 })
+end)
+
+RegisterNUICallback('upsertEnforcement', function(payload, cb)
+    local id = lib.callback.await('doj_finance_suite:server:upsertEnforcement', false, payload)
+    cb({ ok = id and true or false, id = id })
+end)
+
+RegisterNUICallback('listInstallmentPlans', function(payload, cb)
+    local rows, count = lib.callback.await('doj_finance_suite:server:listInstallmentPlans', false, payload and payload.filters or { page = 1, pageSize = 50 })
+    cb({ rows = rows or {}, count = count or 0 })
+end)
+
+RegisterNUICallback('createInstallmentPlan', function(payload, cb)
+    local id = lib.callback.await('doj_finance_suite:server:createInstallmentPlan', false, payload)
+    cb({ ok = id and true or false, id = id })
+end)
+
+RegisterNUICallback('markInstallmentEntryPaid', function(payload, cb)
+    local ok = lib.callback.await('doj_finance_suite:server:markInstallmentEntryPaid', false, payload.entry_id, payload.source_type, payload.source_id, payload.source_key)
+    cb({ ok = ok and true or false })
+end)
+
+RegisterNUICallback('listCaseHandoffs', function(payload, cb)
+    local rows, count = lib.callback.await('doj_finance_suite:server:listCaseHandoffs', false, payload and payload.filters or { page = 1, pageSize = 50 })
+    cb({ rows = rows or {}, count = count or 0 })
+end)
+
+RegisterNUICallback('createCaseHandoff', function(payload, cb)
+    local id = lib.callback.await('doj_finance_suite:server:createCaseHandoff', false, payload)
+    cb({ ok = id and true or false, id = id })
+end)
+
+RegisterNUICallback('listDocuments', function(payload, cb)
+    local rows, count = lib.callback.await('doj_finance_suite:server:listDocuments', false, payload and payload.filters or { page = 1, pageSize = 50 })
+    cb({ rows = rows or {}, count = count or 0 })
+end)
+
+RegisterNUICallback('createDocument', function(payload, cb)
+    local id = lib.callback.await('doj_finance_suite:server:createDocument', false, payload)
+    cb({ ok = id and true or false, id = id })
+end)
+
+RegisterNUICallback('getNetworkProfile', function(payload, cb)
+    local data = lib.callback.await('doj_finance_suite:server:getNetworkProfile', false, payload and payload.business_id or '')
+    cb(data or {})
+end)
+
 local function setupInteraction()
     if Config.Interaction.npc.enabled then
         local model = Config.Interaction.npc.model
