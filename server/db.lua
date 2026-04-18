@@ -393,7 +393,7 @@ function FinanceDB.fetchUsersEconomicSnapshot()
 end
 
 function FinanceDB.fetchAssetSignals()
-    local out = { vehicles = {}, sold = {}, societyAccounts = {}, charges = {}, dojCases = {} }
+    local out = { vehicles = {}, sold = {}, societyAccounts = {}, charges = {}, dojCases = {}, banking = {}, documents = {} }
 
     if FinanceDB.tableExists('owned_vehicles') then
         out.vehicles = MySQL.query.await('SELECT owner, owner_name, company, vehicle, plate, parking_date FROM owned_vehicles ORDER BY parking_date DESC LIMIT 1500') or {}
@@ -409,6 +409,12 @@ function FinanceDB.fetchAssetSignals()
     end
     if FinanceDB.tableExists('doj_cases') then
         out.dojCases = MySQL.query.await('SELECT id, case_number, status, priority, lead_identifier, lead_name, created_at, updated_at FROM doj_cases ORDER BY id DESC LIMIT 1000') or {}
+    end
+    if FinanceDB.tableExists('banking') then
+        out.banking = MySQL.query.await('SELECT identifier, type, amount, time, balance, label FROM banking ORDER BY ID DESC LIMIT 3000') or {}
+    end
+    if FinanceDB.tableExists('player_documents') then
+        out.documents = MySQL.query.await('SELECT serial_number, owner, type, valid, for_pickup FROM player_documents ORDER BY serial_number DESC LIMIT 2000') or {}
     end
 
     return out

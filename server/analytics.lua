@@ -845,6 +845,29 @@ function FinanceAnalytics.getDashboard()
         end
     end
 
+    for _, bankTx in ipairs(assets.banking or {}) do
+        local ident = bankTx.identifier
+        if ident and personSignals[ident] then
+            local amount = math.abs(FinanceUtils.safeNumber(bankTx.amount))
+            if amount >= 25000 then
+                personSignals[ident].score = personSignals[ident].score + 4
+                if #personSignals[ident].reasons < 6 then
+                    personSignals[ident].reasons[#personSignals[ident].reasons + 1] = ('Hohe Banking-Bewegung: $%s'):format(FinanceUtils.formatMoney(amount))
+                end
+            end
+        end
+    end
+
+    for _, doc in ipairs(assets.documents or {}) do
+        local owner = doc.owner
+        if owner and personSignals[owner] and FinanceUtils.toBoolean(doc.valid) == false then
+            personSignals[owner].score = personSignals[owner].score + 2
+            if #personSignals[owner].reasons < 6 then
+                personSignals[owner].reasons[#personSignals[owner].reasons + 1] = 'Ungültige/auffällige Dokumente'
+            end
+        end
+    end
+
     local suspiciousPeople = {}
     for _, profile in pairs(personSignals) do
         if profile.score > 0 then
@@ -854,12 +877,26 @@ function FinanceAnalytics.getDashboard()
     table.sort(suspiciousPeople, function(a, b) return a.score > b.score end)
 
     local suspiciousCompanies = {}
+    local societyLiquidity = {}
+    for _, acc in ipairs(assets.societyAccounts or {}) do
+        local t1 = FinanceUtils.normalizeToken(acc.account_name)
+        local t2 = FinanceUtils.normalizeToken(acc.owner)
+        local money = FinanceUtils.safeNumber(acc.money)
+        if t1 ~= '' then societyLiquidity[t1] = math.max(societyLiquidity[t1] or 0, money) end
+        if t2 ~= '' then societyLiquidity[t2] = math.max(societyLiquidity[t2] or 0, money) end
+    end
+
     for _, bundle in ipairs(highRiskCases) do
         local addScore = 0
         local reasons = {}
+        local liq = societyLiquidity[FinanceUtils.normalizeToken(bundle.business_id)] or societyLiquidity[FinanceUtils.normalizeToken(bundle.job)] or 0
         if bundle.meta and FinanceUtils.safeNumber(bundle.meta.restDebt) > 0 and FinanceUtils.safeNumber(bundle.society_balance) > (bundle.meta.restDebt * 1.2) then
             addScore = addScore + 18
             reasons[#reasons + 1] = 'Hohe Liquidität trotz Restschuld'
+        end
+        if bundle.meta and FinanceUtils.safeNumber(bundle.meta.restDebt) > 0 and liq > (bundle.meta.restDebt * 1.1) then
+            addScore = addScore + 10
+            reasons[#reasons + 1] = 'Addon-Account Liquidität über Restschuld'
         end
         if (bundle.meta and bundle.meta.txWindows and bundle.meta.txWindows[30] and bundle.meta.txWindows[30].incoming or 0) > 50000 and (bundle.meta and bundle.meta.restDebt or 0) > 0 then
             addScore = addScore + 12
@@ -917,7 +954,7 @@ function FinanceAnalytics.getDashboard()
         suspiciousPeople = { table.unpack(suspiciousPeople, 1, math.min(10, #suspiciousPeople)) },
         suspiciousCompanies = { table.unpack(suspiciousCompanies, 1, math.min(10, #suspiciousCompanies)) },
         worklists = {
-            today_pruefen = { table.unpack(highRiskCases, 1, math.min(10, #highRiskCases)) },
+            heute_pruefen = { table.unpack(highRiskCases, 1, math.min(10, #highRiskCases)) },
             bald_faellig = upcomingDeadlines,
             mahnen = (function()
                 local out = {}
@@ -932,7 +969,9 @@ function FinanceAnalytics.getDashboard()
         externalSignals = {
             vehicles = #(assets.vehicles or {}),
             cityhallCharges = #(assets.charges or {}),
-            dojCases = #(assets.dojCases or {})
+            dojCases = #(assets.dojCases or {}),
+            banking = #(assets.banking or {}),
+            documents = #(assets.documents or {})
         },
         frequentDebtors = frequentDebtors,
         highRiskCases = highRiskCases,

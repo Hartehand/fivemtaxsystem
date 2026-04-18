@@ -34,8 +34,10 @@ Die Resource ergänzt nur Workflow-/Metadaten (Reviews, Deadlines, Audit, Report
 - `bossmenu_transactions` (optional)
 - `users` (optional, Personenprofiling)
 - `billing` (optional, offene Zusatzforderungen)
+- `banking` (optional, persönliches Cashflow-Profil)
 - `addon_account_data` (optional, Society-Liquidität)
 - `owned_vehicles` / `vehicle_sold` (optional, Asset-Signale)
+- `player_documents` (optional, Dokumenten-/Lizenzsignale)
 - `vms_cityhall_wasabi_bridge_sync` (optional, Charge-/Bußgeld-Signale)
 - `doj_cases` (optional, DOJ-Verknüpfung)
 
