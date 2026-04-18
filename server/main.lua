@@ -20,7 +20,21 @@ local function hasAccess(source)
     if Config.AllowedGroups[group] then return true end
 
     local job = xPlayer.getJob and xPlayer.getJob()
-    return job and Config.AllowedJobs[job.name] == true
+    if not job or not job.name then
+        return false
+    end
+
+    local allowed = Config.AllowedJobs[job.name] == true
+    if not allowed then
+        return false
+    end
+
+    -- Optional strictness: if duty states exist, block access when clearly off-duty.
+    if job.onDuty ~= nil and job.onDuty == false then
+        return false
+    end
+
+    return true
 end
 
 local function assertAccess(source)
@@ -126,16 +140,18 @@ lib.callback.register('doj_finance_suite:server:getBusinessProfile', function(so
     if not business then return nil end
 
     local parsedData = FinanceUtils.safeDecode(business.data)
-    local taxRows = MySQL.query.await('SELECT job, job_label, period, amount, paid_amount, delayed_amount, late_fee_applied, is_paid, paid_date FROM taxes_business WHERE lower(job) = lower(?) ORDER BY period DESC', {
-        businessId
-    }) or {}
-
-    if #taxRows == 0 then
-        taxRows = MySQL.query.await('SELECT job, job_label, period, amount, paid_amount, delayed_amount, late_fee_applied, is_paid, paid_date FROM taxes_business ORDER BY period DESC LIMIT 250') or {}
+    local _, mapLookup = FinanceDB.fetchBusinessMaps()
+    local taxRows = MySQL.query.await('SELECT job, job_label, period, amount, paid_amount, delayed_amount, late_fee_applied, is_paid, paid_date FROM taxes_business ORDER BY period DESC LIMIT 1200') or {}
+    local filteredTaxRows = {}
+    for _, t in ipairs(taxRows) do
+        local resolvedBusinessId = FinanceAnalytics.resolveBusinessIdForJob(t.job, mapLookup)
+        if FinanceUtils.normalizeToken(resolvedBusinessId) == FinanceUtils.normalizeToken(businessId) then
+            filteredTaxRows[#filteredTaxRows + 1] = t
+        end
     end
 
     local computedTaxes = {}
-    for _, t in ipairs(taxRows) do
+    for _, t in ipairs(filteredTaxRows) do
         local key = FinanceUtils.businessKey(t.job, t.period)
         computedTaxes[#computedTaxes + 1] = FinanceAnalytics.computeBusinessTaxRow(t, FinanceDB.fetchDeadline(Config.RecordTypes.taxes_business, nil, key))
     end
@@ -341,8 +357,9 @@ end)
 local function openFinance(source)
     dprint(('openFinance requested by source %s'):format(source))
     if not hasAccess(source) then
-        dprint(('source %s has no finance permissions, opening in limited mode'):format(source))
-        notify(source, 'Hinweis: Du hast keine Finanzrechte. Tablet wird im eingeschränkten Modus geöffnet.', 'warning')
+        dprint(('source %s denied (no finance permissions)'):format(source))
+        notify(source, 'Kein Zugriff auf die DOJ Finance Suite.', 'error')
+        return
     end
 
     TriggerClientEvent('doj_finance_suite:client:open', source)
