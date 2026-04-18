@@ -246,9 +246,24 @@ RegisterNUICallback('createDocument', function(payload, cb)
     cb({ ok = id and true or false, id = id })
 end)
 
+RegisterNUICallback('updateDocument', function(payload, cb)
+    local ok = lib.callback.await('doj_finance_suite:server:updateDocument', false, payload)
+    cb({ ok = ok and true or false })
+end)
+
 RegisterNUICallback('getNetworkProfile', function(payload, cb)
     local data = lib.callback.await('doj_finance_suite:server:getNetworkProfile', false, payload and payload.business_id or '')
     cb(data or {})
+end)
+
+RegisterNUICallback('searchLookup', function(payload, cb)
+    local rows = lib.callback.await('doj_finance_suite:server:searchLookup', false, payload and payload.kind or '', payload and payload.query or '')
+    cb({ rows = rows or {} })
+end)
+
+RegisterNUICallback('listCitizens', function(payload, cb)
+    local rows, count = lib.callback.await('doj_finance_suite:server:listCitizens', false, payload and payload.filters or { page = 1, pageSize = 60 })
+    cb({ rows = rows or {}, count = count or 0 })
 end)
 
 local function setupInteraction()

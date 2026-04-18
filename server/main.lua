@@ -474,6 +474,21 @@ lib.callback.register('doj_finance_suite:server:createDocument', function(source
     return id
 end)
 
+lib.callback.register('doj_finance_suite:server:updateDocument', function(source, payload)
+    assertAccess(source)
+    return FinanceDB.updateDocument(payload)
+end)
+
+lib.callback.register('doj_finance_suite:server:searchLookup', function(source, kind, query)
+    assertAccess(source)
+    return FinanceDB.searchLookup(kind, query)
+end)
+
+lib.callback.register('doj_finance_suite:server:listCitizens', function(source, filters)
+    assertAccess(source)
+    return FinanceDB.fetchCitizenOverview(filters)
+end)
+
 lib.callback.register('doj_finance_suite:server:getNetworkProfile', function(source, businessId)
     assertAccess(source)
     return FinanceDB.fetchBusinessLinkProfile(businessId)

@@ -644,6 +644,76 @@ function FinanceDB.createDocument(payload)
     ]], { docNo, payload.doc_type, payload.source_type, payload.source_id, payload.source_key, payload.subject_identifier, payload.subject_name, payload.status or 'erstellt', payload.due_date, payload.subject, payload.body, json.encode(payload.meta_json or {}), payload.created_by })
 end
 
+function FinanceDB.updateDocument(payload)
+    if not FinanceDB.tableExists('doj_finance_documents') then return false end
+    MySQL.update.await('UPDATE doj_finance_documents SET status = ?, due_date = ?, subject = ?, body = ?, meta_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', {
+        payload.status, payload.due_date, payload.subject, payload.body, json.encode(payload.meta_json or {}), payload.id
+    })
+    return true
+end
+
+function FinanceDB.searchLookup(kind, q)
+    local term = tostring(q or ''):lower()
+    if #term < 3 then return {} end
+    local w = ('%%%s%%'):format(term)
+    if kind == 'business' then
+        return MySQL.query.await('SELECT id AS value, type AS label FROM vms_business WHERE lower(id) LIKE ? OR lower(type) LIKE ? ORDER BY id ASC LIMIT 20', { w, w }) or {}
+    elseif kind == 'citizen' and FinanceDB.tableExists('users') then
+        return MySQL.query.await('SELECT identifier AS value, CONCAT(firstname, " ", lastname) AS label FROM users WHERE lower(identifier) LIKE ? OR lower(firstname) LIKE ? OR lower(lastname) LIKE ? LIMIT 20', { w, w, w }) or {}
+    elseif kind == 'doj_case' and FinanceDB.tableExists('doj_cases') then
+        return MySQL.query.await('SELECT CAST(id AS CHAR) AS value, case_number AS label FROM doj_cases WHERE lower(case_number) LIKE ? ORDER BY id DESC LIMIT 20', { w }) or {}
+    end
+    return {}
+end
+
+function FinanceDB.fetchCitizenOverview(filters)
+    if not FinanceDB.tableExists('users') then return {}, 0 end
+    filters = filters or {}
+    local clauses, params = { '1=1' }, {}
+    if filters.search and filters.search ~= '' then
+        clauses[#clauses + 1] = '(identifier LIKE ? OR firstname LIKE ? OR lastname LIKE ?)'
+        local w = ('%%%s%%'):format(filters.search)
+        params[#params + 1], params[#params + 1], params[#params + 1] = w, w, w
+    end
+    local where = table.concat(clauses, ' AND ')
+    local _, limit, offset = FinanceUtils.clampPage(filters.page, filters.pageSize)
+    local count = MySQL.scalar.await(('SELECT COUNT(*) FROM users WHERE %s'):format(where), params) or 0
+    params[#params + 1] = limit
+    params[#params + 1] = offset
+    local users = MySQL.query.await(('SELECT identifier, firstname, lastname, accounts FROM users WHERE %s ORDER BY lastname ASC LIMIT ? OFFSET ?'):format(where), params) or {}
+    local out = {}
+    for _, u in ipairs(users) do
+        local tx = MySQL.single.await([[
+            SELECT
+              SUM(CASE WHEN receiver_identifier = ? THEN ABS(value) ELSE 0 END) AS incoming,
+              SUM(CASE WHEN sender_identifier = ? THEN ABS(value) ELSE 0 END) AS outgoing
+            FROM okokbanking_transactions
+        ]], { u.identifier, u.identifier }) or {}
+        local banking = FinanceDB.tableExists('banking') and MySQL.single.await('SELECT SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS incoming, SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) AS outgoing, MAX(balance) AS max_balance FROM banking WHERE identifier = ?', { u.identifier }) or {}
+        local billing = FinanceDB.tableExists('billing') and (MySQL.scalar.await('SELECT SUM(amount) FROM billing WHERE identifier = ?', { u.identifier }) or 0) or 0
+        local accounts = FinanceUtils.safeDecode(u.accounts)
+        local declaredCash = FinanceUtils.safeNumber(accounts.money) + FinanceUtils.safeNumber(accounts.cash) + FinanceUtils.safeNumber(accounts.bank)
+        local incoming = FinanceUtils.safeNumber(tx.incoming) + FinanceUtils.safeNumber(banking and banking.incoming)
+        local outgoing = FinanceUtils.safeNumber(tx.outgoing) + FinanceUtils.safeNumber(banking and banking.outgoing)
+        local expectedCash = declaredCash + incoming - outgoing - FinanceUtils.safeNumber(billing)
+        local diff = math.abs(expectedCash - declaredCash)
+        local score = math.min(100, math.floor(diff / 5000) + math.floor(FinanceUtils.safeNumber(billing) / 3000))
+        out[#out + 1] = {
+            identifier = u.identifier,
+            name = ((u.firstname or '') .. ' ' .. (u.lastname or '')):gsub('^%s+', ''):gsub('%s+$', ''),
+            incoming = incoming,
+            outgoing = outgoing,
+            billing_open = billing,
+            declared_cash = declaredCash,
+            expected_cash = expectedCash,
+            cash_diff = diff,
+            score = score,
+            flag = diff >= 25000 and 'cash_diff_high' or 'ok'
+        }
+    end
+    return out, count
+end
+
 function FinanceDB.fetchTransactionsByDateRange(fromDate, toDate)
     local rows = MySQL.query.await([[
         SELECT id, receiver_identifier, receiver_name, sender_identifier, sender_name, date, value, type

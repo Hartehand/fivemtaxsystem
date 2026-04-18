@@ -18,6 +18,69 @@ function post(action, data) {
   });
 }
 
+function openEditModal(title, fields, onSave) {
+  var existing = document.getElementById('modalOverlay');
+  if (existing) existing.remove();
+  var overlay = document.createElement('div');
+  overlay.id = 'modalOverlay';
+  overlay.style.position = 'fixed';
+  overlay.style.inset = '0';
+  overlay.style.background = 'rgba(0,0,0,.55)';
+  overlay.style.display = 'grid';
+  overlay.style.placeItems = 'center';
+  overlay.style.zIndex = '9999';
+  var form = fields.map(function(f) {
+    var value = (f.value === undefined || f.value === null) ? '' : String(f.value);
+    return '<label style="display:block;margin-bottom:8px;"><div class="small">' + f.label + '</div><input data-modal-field="' + f.key + '" value="' + value.replace(/"/g, '&quot;') + '" /></label>';
+  }).join('');
+  overlay.innerHTML = '<div style="width:min(720px,92vw);background:#10192b;border:1px solid #35598f;border-radius:12px;padding:14px;"><h3 style="margin-top:0;">' + title + '</h3>' + form + '<div class="input-row"><button id="modalCancel">Abbrechen</button><button id="modalSave">Speichern</button></div></div>';
+  document.body.appendChild(overlay);
+  document.getElementById('modalCancel').addEventListener('click', function() { overlay.remove(); });
+  document.getElementById('modalSave').addEventListener('click', function() {
+    var out = {};
+    fields.forEach(function(f) {
+      var el = document.querySelector('[data-modal-field="' + f.key + '"]');
+      out[f.key] = el ? el.value : '';
+    });
+    onSave(out);
+    overlay.remove();
+  });
+}
+
+function attachLookup(inputId, kind, onSelect) {
+  var input = document.getElementById(inputId);
+  if (!input) return;
+  var listId = inputId + '_lookup';
+  var list = document.createElement('div');
+  list.id = listId;
+  list.style.position = 'absolute';
+  list.style.background = '#0f1a2c';
+  list.style.border = '1px solid #35598f';
+  list.style.zIndex = '1000';
+  list.style.maxHeight = '220px';
+  list.style.overflow = 'auto';
+  input.parentElement.style.position = 'relative';
+  input.parentElement.appendChild(list);
+  input.addEventListener('input', function() {
+    var q = input.value || '';
+    if (q.length < 3) { list.innerHTML = ''; return; }
+    post('searchLookup', { kind: kind, query: q }).then(function(data) {
+      var rows = data.rows || [];
+      list.innerHTML = rows.map(function(r) {
+        return '<div data-value="' + r.value + '" style="padding:6px 8px;cursor:pointer;">' + (r.label || r.value) + ' <span class="small">(' + r.value + ')</span></div>';
+      }).join('');
+      Array.prototype.slice.call(list.querySelectorAll('[data-value]')).forEach(function(el) {
+        el.addEventListener('click', function() {
+          var value = el.getAttribute('data-value');
+          input.value = value;
+          list.innerHTML = '';
+          onSelect && onSelect(value);
+        });
+      });
+    });
+  });
+}
+
 function badge(band) {
   var b = band || 'unauffaellig';
   return '<span class="badge ' + b + '">' + b + '</span>';
@@ -401,9 +464,9 @@ function renderReports(selectedReportId) {
 function renderEnforcement() {
   post('listEnforcement', { filters: { page: 1, pageSize: 80 } }).then(function(data) {
     var rows = (data.rows || []).map(function(r) {
-      return '<tr><td>' + r.id + '</td><td>' + (r.source_type || '-') + '</td><td>' + (r.source_key || r.source_id || '-') + '</td><td>' + (r.status || '-') + '</td><td>' + (r.next_due_date || '-') + '</td><td>' + (r.reason || '-') + '</td></tr>';
+      return '<tr><td>' + r.id + '</td><td>' + (r.source_type || '-') + '</td><td>' + (r.source_key || r.source_id || '-') + '</td><td>' + (r.status || '-') + '</td><td>' + (r.next_due_date || '-') + '</td><td>' + (r.reason || '-') + '</td><td><button data-edit-enf="' + r.id + '">Bearbeiten</button></td></tr>';
     }).join('');
-    content.innerHTML = '<div class="input-row"><input id="enfSourceType" placeholder="source_type" value="taxes_business" /><input id="enfSourceKey" placeholder="source_key" /><select id="enfStatus"><option value="offen">offen</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="vollstreckung_empfohlen">vollstreckung_empfohlen</option><option value="erledigt">erledigt</option><option value="ausgesetzt">ausgesetzt</option></select><input id="enfDue" placeholder="next_due_date YYYY-MM-DD" /><input id="enfReason" placeholder="Begründung" /><button id="saveEnforcement">Speichern</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>Status</th><th>Nächste Frist</th><th>Grund</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    content.innerHTML = '<div class="input-row"><input id="enfSourceType" placeholder="source_type" value="taxes_business" /><input id="enfSourceKey" placeholder="source_key" /><select id="enfStatus"><option value="offen">offen</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="vollstreckung_empfohlen">vollstreckung_empfohlen</option><option value="erledigt">erledigt</option><option value="ausgesetzt">ausgesetzt</option></select><input id="enfDue" placeholder="next_due_date YYYY-MM-DD" /><input id="enfReason" placeholder="Begründung" /><button id="saveEnforcement">Speichern</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>Status</th><th>Nächste Frist</th><th>Grund</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
     var btn = document.getElementById('saveEnforcement');
     if (btn) {
       btn.addEventListener('click', function() {
@@ -419,6 +482,30 @@ function renderEnforcement() {
         }).then(function() { renderEnforcement(); });
       });
     }
+    Array.prototype.slice.call(document.querySelectorAll('[data-edit-enf]')).forEach(function(el) {
+      el.addEventListener('click', function() {
+        var id = Number(el.getAttribute('data-edit-enf'));
+        var row = (data.rows || []).find(function(r) { return Number(r.id) === id; });
+        if (!row) return;
+        openEditModal('Mahnfall bearbeiten #' + id, [
+          { key: 'status', label: 'Status', value: row.status },
+          { key: 'next_due_date', label: 'Nächste Frist', value: row.next_due_date },
+          { key: 'reason', label: 'Grund', value: row.reason }
+        ], function(values) {
+          post('upsertEnforcement', {
+            id: id,
+            source_type: row.source_type,
+            source_id: row.source_id,
+            source_key: row.source_key,
+            subject_type: row.subject_type,
+            subject_identifier: row.subject_identifier,
+            status: values.status,
+            next_due_date: values.next_due_date,
+            reason: values.reason
+          }).then(function() { renderEnforcement(); });
+        });
+      });
+    });
   });
 }
 
@@ -499,9 +586,9 @@ function renderNetwork() {
 function renderDocuments() {
   post('listDocuments', { filters: { page: 1, pageSize: 100 } }).then(function(data) {
     var rows = (data.rows || []).map(function(d) {
-      return '<tr><td>' + d.doc_no + '</td><td>' + d.doc_type + '</td><td>' + (d.subject_name || d.subject_identifier || '-') + '</td><td>' + d.subject + '</td><td>' + (d.status || '-') + '</td><td>' + (d.due_date || '-') + '</td></tr>';
+      return '<tr><td>' + d.doc_no + '</td><td>' + d.doc_type + '</td><td>' + (d.subject_name || d.subject_identifier || '-') + '</td><td>' + d.subject + '</td><td>' + (d.status || '-') + '</td><td>' + (d.due_date || '-') + '</td><td><button data-edit-doc="' + d.id + '">Bearbeiten</button></td></tr>';
     }).join('');
-    content.innerHTML = '<div class="input-row"><select id="docType"><option value="zahlungsaufforderung">zahlungsaufforderung</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="ratenzahlungsvereinbarung">ratenzahlungsvereinbarung</option><option value="pruefankuendigung">pruefankuendigung</option><option value="uebergabevermerk_doj">uebergabevermerk_doj</option><option value="abschlussvermerk">abschlussvermerk</option></select><input id="docSourceType" placeholder="source_type" /><input id="docSourceKey" placeholder="source_key" /><input id="docSubjectName" placeholder="Betroffene Person/Firma" /><input id="docSubject" placeholder="Betreff" /><input id="docDue" placeholder="Frist YYYY-MM-DD" /><input id="docBody" placeholder="Inhalt" /><button id="createDoc">Dokument erstellen</button></div><div class="table-wrap"><table><thead><tr><th>Doc-No</th><th>Typ</th><th>Betroffen</th><th>Betreff</th><th>Status</th><th>Frist</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    content.innerHTML = '<div class="input-row"><select id="docType"><option value="zahlungsaufforderung">zahlungsaufforderung</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="ratenzahlungsvereinbarung">ratenzahlungsvereinbarung</option><option value="pruefankuendigung">pruefankuendigung</option><option value="uebergabevermerk_doj">uebergabevermerk_doj</option><option value="abschlussvermerk">abschlussvermerk</option></select><input id="docSourceType" placeholder="source_type" /><input id="docSourceKey" placeholder="source_key" /><input id="docSubjectName" placeholder="Betroffene Person/Firma" /><input id="docSubject" placeholder="Betreff" /><input id="docDue" placeholder="Frist YYYY-MM-DD" /><input id="docBody" placeholder="Inhalt" /><button id="createDoc">Dokument erstellen</button></div><div class="table-wrap"><table><thead><tr><th>Doc-No</th><th>Typ</th><th>Betroffen</th><th>Betreff</th><th>Status</th><th>Frist</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
     var btn = document.getElementById('createDoc');
     if (btn) btn.addEventListener('click', function() {
       post('createDocument', {
@@ -516,7 +603,45 @@ function renderDocuments() {
         status: 'erstellt'
       }).then(function() { renderDocuments(); });
     });
+    Array.prototype.slice.call(document.querySelectorAll('[data-edit-doc]')).forEach(function(el) {
+      el.addEventListener('click', function() {
+        var id = Number(el.getAttribute('data-edit-doc'));
+        var doc = (data.rows || []).find(function(r) { return Number(r.id) === id; });
+        if (!doc) return;
+        openEditModal('Dokument bearbeiten ' + (doc.doc_no || id), [
+          { key: 'status', label: 'Status', value: doc.status },
+          { key: 'due_date', label: 'Frist', value: doc.due_date },
+          { key: 'subject', label: 'Betreff', value: doc.subject },
+          { key: 'body', label: 'Inhalt', value: doc.body }
+        ], function(values) {
+          post('updateDocument', {
+            id: id,
+            status: values.status,
+            due_date: values.due_date,
+            subject: values.subject,
+            body: values.body
+          }).then(function() { renderDocuments(); });
+        });
+      });
+    });
   });
+}
+
+function renderCitizens() {
+  content.innerHTML = '<div class="input-row"><input id="citizenSearch" placeholder="Suche Bürger" /><button id="citizenApply">Suchen</button></div><div id="citizenResult"></div>';
+  function load() {
+    post('listCitizens', { filters: { page: 1, pageSize: 80, search: (document.getElementById('citizenSearch') || {}).value || '' } }).then(function(data) {
+      var rows = (data.rows || []).map(function(c) {
+        var flag = c.flag === 'cash_diff_high' ? '<span class="badge hochrisiko">Diff hoch</span>' : '<span class="badge unauffaellig">ok</span>';
+        return '<tr><td>' + (c.name || c.identifier) + '</td><td>' + c.identifier + '</td><td>' + money(c.incoming) + '</td><td>' + money(c.outgoing) + '</td><td>' + money(c.billing_open) + '</td><td>' + money(c.declared_cash) + '</td><td>' + money(c.expected_cash) + '</td><td>' + money(c.cash_diff) + '</td><td>' + c.score + '</td><td>' + flag + '</td></tr>';
+      }).join('');
+      var result = document.getElementById('citizenResult');
+      if (result) result.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Identifier</th><th>Ein</th><th>Aus</th><th>Offen Billing</th><th>Declared Cash</th><th>Expected Cash</th><th>Differenz</th><th>Score</th><th>Flag</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    });
+  }
+  var btn = document.getElementById('citizenApply');
+  if (btn) btn.addEventListener('click', load);
+  load();
 }
 
 function renderMapping() {
@@ -525,7 +650,14 @@ function renderMapping() {
       return '<tr><td>' + m.tax_job + '</td><td>' + m.business_id + '</td><td>' + (m.alias || '-') + '</td></tr>';
     }).join('');
 
-    content.innerHTML = '<div class="input-row"><input id="taxJob" placeholder="tax_job" /><input id="businessId" placeholder="business_id" /><input id="alias" placeholder="alias (optional)" /><button id="saveMap">Speichern</button></div><div class="table-wrap"><table><thead><tr><th>tax_job</th><th>business_id</th><th>alias</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    content.innerHTML = '<div class="input-row"><input id="taxJob" placeholder="tax_job (ab 3 Zeichen)" /><input id="businessId" placeholder="business_id (ab 3 Zeichen)" /><input id="alias" placeholder="alias (optional)" /><button id="mapSearch">Suchen</button><button id="saveMap">Speichern</button></div><div class="table-wrap"><table><thead><tr><th>tax_job</th><th>business_id</th><th>alias</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    attachLookup('businessId', 'business');
+    attachLookup('taxJob', 'business');
+
+    var searchBtn = document.getElementById('mapSearch');
+    if (searchBtn) searchBtn.addEventListener('click', function() {
+      renderMapping();
+    });
 
     var saveBtn = document.getElementById('saveMap');
     if (saveBtn) {
@@ -552,6 +684,7 @@ function render() {
   if (state.tab === 'handoffs') return renderHandoffs();
   if (state.tab === 'network') return renderNetwork();
   if (state.tab === 'documents') return renderDocuments();
+  if (state.tab === 'citizens') return renderCitizens();
   if (state.tab === 'reports') return renderReports();
   if (state.tab === 'mapping') return renderMapping();
 }
