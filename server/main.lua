@@ -281,6 +281,11 @@ lib.callback.register('doj_finance_suite:server:reviewLink', function(source, pa
     return FinanceReviews.reviewLink(source, payload)
 end)
 
+lib.callback.register('doj_finance_suite:server:listMappingLinks', function(source, filters)
+    assertAccess(source)
+    return FinanceDB.listMappingLinks(filters)
+end)
+
 lib.callback.register('doj_finance_suite:server:upsertBusinessMap', function(source, payload)
     assertAccess(source)
     FinanceDB.upsertBusinessMap(payload.tax_job, payload.business_id, payload.alias, getPlayer(source).getIdentifier())

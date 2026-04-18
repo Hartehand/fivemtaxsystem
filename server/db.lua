@@ -1036,6 +1036,52 @@ function FinanceDB.fetchLinks(sourceType, sourceId, sourceKey)
     ]]):format(linkTypeExpr, confidenceScoreExpr, confidenceBandExpr, reasonCodesExpr, reasonTextExpr, detectionModeExpr, reviewStatusExpr, reviewedByExpr, reviewedAtExpr), { sourceType, sourceId, sourceKey }) or {}
 end
 
+function FinanceDB.listMappingLinks(filters)
+    if not FinanceDB.tableExists('doj_finance_links') then return {}, 0 end
+    filters = filters or {}
+    local cols = FinanceDB.fetchTableColumns('doj_finance_links')
+    local clauses, params = { '1=1' }, {}
+    if filters.review_status and filters.review_status ~= '' and cols.review_status then
+        clauses[#clauses + 1] = 'review_status = ?'
+        params[#params + 1] = filters.review_status
+    end
+    if filters.search and filters.search ~= '' then
+        local w = ('%%%s%%'):format(filters.search)
+        local searchParts = { 'business_job LIKE ?', 'tax_source_key LIKE ?', 'comment LIKE ?' }
+        params[#params + 1], params[#params + 1], params[#params + 1] = w, w, w
+        if cols.target_ref then
+            searchParts[#searchParts + 1] = 'target_ref LIKE ?'
+            params[#params + 1] = w
+        end
+        clauses[#clauses + 1] = '(' .. table.concat(searchParts, ' OR ') .. ')'
+    end
+    local where = table.concat(clauses, ' AND ')
+    local _, limit, offset = FinanceUtils.clampPage(filters.page, filters.pageSize)
+    local count = MySQL.scalar.await(('SELECT COUNT(*) FROM doj_finance_links WHERE %s'):format(where), params) or 0
+    params[#params + 1] = limit
+    params[#params + 1] = offset
+    local reasonCodesExpr = cols.reason_codes and 'reason_codes' or 'NULL AS reason_codes'
+    local reasonTextExpr = cols.reason_text and 'reason_text' or 'NULL AS reason_text'
+    local detectionModeExpr = cols.detection_mode and 'detection_mode' or "'automatic' AS detection_mode"
+    local reviewStatusExpr = cols.review_status and 'review_status' or "'vorgeschlagen' AS review_status"
+    local reviewedByExpr = cols.reviewed_by and 'reviewed_by' or 'NULL AS reviewed_by'
+    local reviewedAtExpr = cols.reviewed_at and 'reviewed_at' or 'NULL AS reviewed_at'
+    local linkTypeExpr = cols.link_type and 'link_type' or "'verdachtsverbindung' AS link_type"
+    local confidenceScoreExpr = cols.confidence_score and 'confidence_score' or '0 AS confidence_score'
+    local confidenceBandExpr = cols.confidence_band and 'confidence_band' or "'niedrig' AS confidence_band"
+    local targetTypeExpr = cols.target_type and 'target_type' or "'business' AS target_type"
+    local targetRefExpr = cols.target_ref and 'target_ref' or 'NULL AS target_ref'
+    local rows = MySQL.query.await(([[
+        SELECT id, business_job, period, tax_source_type, tax_source_id, tax_source_key, match_quality, comment, created_by, created_at,
+               %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        FROM doj_finance_links
+        WHERE %s
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+    ]]):format(linkTypeExpr, targetTypeExpr, targetRefExpr, confidenceScoreExpr, confidenceBandExpr, reasonCodesExpr, reasonTextExpr, detectionModeExpr, reviewStatusExpr, reviewedByExpr, reviewedAtExpr, where), params) or {}
+    return rows, count
+end
+
 function FinanceDB.createLink(payload)
     local cols = FinanceDB.fetchTableColumns('doj_finance_links')
     local fields = { 'business_job', 'period', 'transaction_id', 'tax_source_type', 'tax_source_id', 'tax_source_key', 'match_quality', 'comment', 'created_by' }

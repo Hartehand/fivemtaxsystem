@@ -215,6 +215,7 @@ function bindCaseDetailButtons() {
           '<button id="caseQuickDocument">Dokument erzeugen</button>' +
           '<button id="caseQuickDeadline">Frist setzen</button>' +
           '</div>';
+        attachLookup('caseDojCase', 'doj_case');
 
         var startBtn = document.getElementById('caseStartReview');
         if (startBtn) {
@@ -792,6 +793,7 @@ function renderHandoffs() {
         });
       }, 240));
     }
+    attachLookup('hoCaseNo', 'doj_case');
     var btn = document.getElementById('saveHandoff');
     if (btn) btn.addEventListener('click', function() {
       var selected = caseMap[(document.getElementById('hoCaseSelect') || {}).value || ''] || {};
@@ -828,9 +830,18 @@ function renderNetwork() {
       Array.prototype.slice.call(document.querySelectorAll('[data-nw-open]')).forEach(function(openBtn) {
         openBtn.addEventListener('click', function() {
           var businessId = openBtn.getAttribute('data-nw-open') || '';
-          if (!businessId || mode !== 'business') {
+          if (!businessId) {
+            return;
+          }
+          if (mode !== 'business') {
             var panel = document.getElementById('networkPanel');
-            if (panel) panel.textContent = 'Detailansicht ist aktuell für Firmenmodus verfügbar.';
+            var row = rows.find(function(r) { return (r.value || '') === businessId; }) || {};
+            if (panel) panel.textContent = [
+              'Modus: ' + mode,
+              'Treffer: ' + (row.value || '-'),
+              'Bezug: ' + (row.label || '-'),
+              'Hinweis: Für ' + mode + ' kann die Akte direkt aus Fälle/Register geöffnet werden.'
+            ].join('\n');
             return;
           }
           post('getNetworkProfile', { business_id: businessId }).then(function(data) {
@@ -958,30 +969,60 @@ function renderCitizens() {
 
 function renderMapping() {
   post('getBusinessMaps', {}).then(function(maps) {
-    var rows = (maps.rows || []).map(function(m) {
-      return '<tr><td>' + m.tax_job + '</td><td>' + m.business_id + '</td><td>' + (m.alias || '-') + '</td></tr>';
-    }).join('');
+    post('listMappingLinks', { filters: { page: 1, pageSize: 80, review_status: (document.getElementById('mapStatusFilter') || {}).value || '' } }).then(function(linkData) {
+      var rows = (maps.rows || []).map(function(m) {
+        return '<tr><td>' + m.tax_job + '</td><td>' + m.business_id + '</td><td>' + (m.alias || '-') + '</td></tr>';
+      }).join('');
+      var linkRows = (linkData.rows || []).map(function(l) {
+        var reasons = '';
+        try { reasons = (JSON.parse(l.reason_codes || '[]') || []).join(', '); } catch (e) { reasons = ''; }
+        return '<tr><td>' + l.id + '</td><td>' + (l.link_type || '-') + '</td><td>' + (l.tax_source_type || '-') + '</td><td>' + (l.tax_source_key || '-') + '</td><td>' + (l.target_ref || l.business_job || '-') + '</td><td>' + Number(l.confidence_score || 0).toFixed(1) + ' (' + (l.confidence_band || '-') + ')</td><td>' + (l.review_status || '-') + '</td><td>' + (reasons || l.reason_text || '-') + '</td><td>' + (l.reviewed_by || '-') + '</td><td><button data-link-review="' + l.id + ':bestaetigt">Bestätigen</button><button data-link-review="' + l.id + ':verworfen">Verwerfen</button><button data-link-review="' + l.id + ':geprueft">Beobachtung</button></td></tr>';
+      }).join('');
 
-    content.innerHTML = '<div class="input-row"><input id="taxJob" placeholder="tax_job (ab 3 Zeichen)" /><input id="businessId" placeholder="business_id (ab 3 Zeichen)" /><input id="alias" placeholder="alias (optional)" /><button id="mapSearch">Suchen</button><button id="saveMap">Speichern</button></div><div class="table-wrap"><table><thead><tr><th>tax_job</th><th>business_id</th><th>alias</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
-    attachLookup('businessId', 'business');
-    attachLookup('taxJob', 'business');
+      content.innerHTML = '<div class="input-row"><input id="taxJob" placeholder="tax_job (ab 3 Zeichen)" /><input id="businessId" placeholder="business_id (ab 3 Zeichen)" /><input id="alias" placeholder="alias (optional)" /><button id="mapSearch">Suchen</button><button id="saveMap">Speichern</button></div><div class="table-wrap"><table><thead><tr><th>tax_job</th><th>business_id</th><th>alias</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="input-row"><select id="mapStatusFilter"><option value="">Mappingstatus: alle</option><option value="vorgeschlagen">vorgeschlagen</option><option value="geprueft">geprüft</option><option value="bestaetigt">bestätigt</option><option value="verworfen">verworfen</option></select><button id="mapRefreshLinks">Mapping-Fälle neu laden</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Link-Typ</th><th>Quelle</th><th>Source Ref</th><th>Ziel</th><th>Confidence</th><th>Status</th><th>Gründe</th><th>Geprüft von</th><th>Aktion</th></tr></thead><tbody>' + linkRows + '</tbody></table></div>';
+      attachLookup('businessId', 'business');
+      attachLookup('taxJob', 'business');
 
-    var searchBtn = document.getElementById('mapSearch');
-    if (searchBtn) searchBtn.addEventListener('click', function() {
-      renderMapping();
-    });
+      var searchBtn = document.getElementById('mapSearch');
+      if (searchBtn) searchBtn.addEventListener('click', function() { renderMapping(); });
 
-    var saveBtn = document.getElementById('saveMap');
-    if (saveBtn) {
-      saveBtn.addEventListener('click', function() {
-        var payload = {
-          tax_job: (document.getElementById('taxJob') || {}).value || '',
-          business_id: (document.getElementById('businessId') || {}).value || '',
-          alias: (document.getElementById('alias') || {}).value || ''
-        };
-        post('upsertBusinessMap', payload).then(function() { renderMapping(); });
+      var saveBtn = document.getElementById('saveMap');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', function() {
+          var payload = {
+            tax_job: (document.getElementById('taxJob') || {}).value || '',
+            business_id: (document.getElementById('businessId') || {}).value || '',
+            alias: (document.getElementById('alias') || {}).value || ''
+          };
+          post('upsertBusinessMap', payload).then(function() { renderMapping(); });
+        });
+      }
+
+      var refresh = document.getElementById('mapRefreshLinks');
+      if (refresh) refresh.addEventListener('click', function() { renderMapping(); });
+      Array.prototype.slice.call(document.querySelectorAll('[data-link-review]')).forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var parts = (btn.getAttribute('data-link-review') || '').split(':');
+          var linkId = Number(parts[0] || 0);
+          var status = parts[1] || 'geprueft';
+          if (!linkId) return;
+          openEditModal('Mappingstatus setzen #' + linkId, [
+            { key: 'reason_code', label: 'Reason Code', value: 'manual_note' },
+            { key: 'note', label: 'Notiz', value: 'Mapping manuell geprüft.' }
+          ], function(v) {
+            post('reviewLink', {
+              link_id: linkId,
+              review_status: status,
+              reason_code: v.reason_code || 'manual_note',
+              note: v.note || '',
+              source_type: 'mapping',
+              source_id: null,
+              source_key: String(linkId)
+            }).then(function() { renderMapping(); });
+          });
+        });
       });
-    }
+    });
   });
 }
 

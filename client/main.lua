@@ -276,6 +276,16 @@ RegisterNUICallback('searchRegister', function(payload, cb)
     cb({ rows = rows or {} })
 end)
 
+RegisterNUICallback('listMappingLinks', function(payload, cb)
+    local rows, count = lib.callback.await('doj_finance_suite:server:listMappingLinks', false, payload and payload.filters or { page = 1, pageSize = 50 })
+    cb({ rows = rows or {}, count = count or 0 })
+end)
+
+RegisterNUICallback('reviewLink', function(payload, cb)
+    local ok = lib.callback.await('doj_finance_suite:server:reviewLink', false, payload)
+    cb({ ok = ok and true or false })
+end)
+
 local function setupInteraction()
     if Config.Interaction.npc.enabled then
         local model = Config.Interaction.npc.model
