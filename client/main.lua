@@ -266,6 +266,16 @@ RegisterNUICallback('listCitizens', function(payload, cb)
     cb({ rows = rows or {}, count = count or 0 })
 end)
 
+RegisterNUICallback('searchCases', function(payload, cb)
+    local rows = lib.callback.await('doj_finance_suite:server:searchCases', false, payload and payload.query or '')
+    cb({ rows = rows or {} })
+end)
+
+RegisterNUICallback('searchRegister', function(payload, cb)
+    local rows = lib.callback.await('doj_finance_suite:server:searchRegister', false, payload and payload.mode or 'business', payload and payload.query or '')
+    cb({ rows = rows or {} })
+end)
+
 local function setupInteraction()
     if Config.Interaction.npc.enabled then
         local model = Config.Interaction.npc.model

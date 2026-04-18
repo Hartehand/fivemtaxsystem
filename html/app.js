@@ -18,6 +18,33 @@ function post(action, data) {
   });
 }
 
+function debounce(fn, wait) {
+  var t = null;
+  return function() {
+    var args = arguments;
+    clearTimeout(t);
+    t = setTimeout(function() { fn.apply(null, args); }, wait || 220);
+  };
+}
+
+var STANDARD_REASONS = [
+  'Nichtzahlung trotz Liquidität',
+  'Wiederholte verspätete Zahlung',
+  'hohe offene Restschuld',
+  'unklare Transaktionsherkunft',
+  'private und geschäftliche Mittel vermischt',
+  'Bußgeld-/Charge-Bezug',
+  'Vermögensauffälligkeit',
+  'Mapping manuell bestätigt',
+  'weitere Nachprüfung erforderlich'
+];
+
+function reasonOptions(selected) {
+  return STANDARD_REASONS.map(function(r) {
+    return '<option value="' + r + '"' + (r === selected ? ' selected' : '') + '>' + r + '</option>';
+  }).join('');
+}
+
 function openEditModal(title, fields, onSave) {
   var existing = document.getElementById('modalOverlay');
   if (existing) existing.remove();
@@ -45,6 +72,30 @@ function openEditModal(title, fields, onSave) {
     onSave(out);
     overlay.remove();
   });
+}
+
+function buildCaseContext(detail) {
+  var record = detail.record || {};
+  var amount = Number(record.restschuld || record.amount || 0);
+  var subjectName = record.receiver_name || record.receiver || record.job_label || record.job || record.owner || record.id || detail.source_key || '-';
+  return {
+    source_type: detail.source_type,
+    source_id: detail.source_id || null,
+    source_key: detail.source_key || null,
+    subject_name: subjectName,
+    subject_identifier: record.receiver || record.job || detail.source_key || detail.source_id || '',
+    amount: amount,
+    risk_score: Number((record.risk && record.risk.score) || record.score || 0),
+    risk_band: (record.risk && record.risk.band) || record.risk_band || 'unauffaellig',
+    due_date: record.due_date || record.next_due_date || null
+  };
+}
+
+function recommendAction(ctx) {
+  if (ctx.amount > 25000) return { action: 'doj_handoff', reason: 'Hohe offene Forderung', priority: 'hoch', due: ctx.due_date || '7 Tage' };
+  if (ctx.amount > 10000) return { action: 'mahnung', reason: 'Erhöhte Restschuld', priority: 'hoch', due: ctx.due_date || '5 Tage' };
+  if (ctx.amount > 0) return { action: 'erinnerung', reason: 'Offene Forderung vorhanden', priority: 'normal', due: ctx.due_date || '14 Tage' };
+  return { action: 'fall_schliessen', reason: 'Keine Restschuld', priority: 'niedrig', due: '-' };
 }
 
 function attachLookup(inputId, kind, onSelect) {
@@ -135,13 +186,16 @@ function bindCaseDetailButtons() {
       var payload = JSON.parse(decodeURIComponent(btn.getAttribute('data-detail')));
       post('getCaseDetail', payload).then(function(detail) {
         var bundle = detail.bundle || {};
+        var ctx = buildCaseContext(detail);
+        var recommendation = recommendAction(ctx);
         var lines = [];
         lines.push('Status: ' + ((bundle.review && bundle.review.status) || 'neu'));
         lines.push('Bearbeiter: ' + ((bundle.review && bundle.review.assigned_to) || '-'));
         lines.push('Deadline: ' + ((bundle.deadline && bundle.deadline.due_date) || 'Standard'));
-        lines.push('--- Notizen ---');
+        lines.push('Empfohlene Maßnahme: ' + recommendation.action + ' | Grund: ' + recommendation.reason + ' | Priorität: ' + recommendation.priority + ' | Frist: ' + recommendation.due);
+        lines.push('--- Letzte Notizen ---');
         (bundle.notes || []).slice(0, 8).forEach(function(n) { lines.push((n.author_identifier || '-') + ': ' + (n.note || '-')); });
-        lines.push('--- Audit ---');
+        lines.push('--- Letzte Aktenaktionen ---');
         (bundle.audit || []).slice(0, 8).forEach(function(a) { lines.push((a.created_at || '-') + ': ' + (a.action || '-')); });
 
         var panel = document.getElementById('detail');
@@ -149,11 +203,17 @@ function bindCaseDetailButtons() {
         panel.innerHTML = lines.join('<br/>') +
           '<div class="input-row" style="margin-top:10px;">' +
           '<button id="caseStartReview">Prüfverfahren starten</button>' +
-          '<input id="casePriority" placeholder="Priorität (low/normal/high)" />' +
-          '<input id="caseDojCase" placeholder="DOJ Case ID" />' +
+          '<select id="casePriority"><option value="normal">normal</option><option value="high">high</option><option value="low">low</option></select>' +
+          '<input id="caseDojCase" placeholder="DOJ Case ID / Nummer" />' +
           '<input id="caseNote" placeholder="Notiztext" />' +
           '<button id="caseSaveNote">Notiz speichern</button>' +
           '<button id="caseSaveMeta">Meta speichern</button>' +
+          '</div><div class="input-row">' +
+          '<button id="caseQuickEnforcement">Mahnung starten</button>' +
+          '<button id="caseQuickPlan">Ratenplan anlegen</button>' +
+          '<button id="caseQuickHandoff">DOJ-Handoff anlegen</button>' +
+          '<button id="caseQuickDocument">Dokument erzeugen</button>' +
+          '<button id="caseQuickDeadline">Frist setzen</button>' +
           '</div>';
 
         var startBtn = document.getElementById('caseStartReview');
@@ -188,17 +248,136 @@ function bindCaseDetailButtons() {
         if (metaBtn) {
           metaBtn.addEventListener('click', function() {
             var priority = (document.getElementById('casePriority') || {}).value || 'normal';
-            var dojCase = Number((document.getElementById('caseDojCase') || {}).value || 0);
+            var dojInput = (document.getElementById('caseDojCase') || {}).value || '';
+            var dojCase = Number(dojInput || 0);
             post('setCaseMeta', {
               source_type: detail.source_type,
               source_id: detail.source_id || null,
               source_key: detail.source_key || null,
               priority: priority,
               doj_case_id: dojCase > 0 ? dojCase : null,
+              doj_case_number: dojCase > 0 ? null : (dojInput || null),
               evidence: { reason_snapshot: lines.slice(0, 6) }
             });
           });
         }
+
+        var quickEnf = document.getElementById('caseQuickEnforcement');
+        if (quickEnf) quickEnf.addEventListener('click', function() {
+          openEditModal('Mahnfall aus Akte', [
+            { key: 'status', label: 'Status', value: 'mahnung' },
+            { key: 'reason', label: 'Grund', value: 'hohe offene Restschuld' },
+            { key: 'next_due_date', label: 'Frist (YYYY-MM-DD)', value: ctx.due_date || '' }
+          ], function(v) {
+            post('upsertEnforcement', {
+              source_type: ctx.source_type,
+              source_id: ctx.source_id,
+              source_key: ctx.source_key,
+              subject_type: 'case',
+              subject_identifier: ctx.subject_identifier,
+              status: v.status || 'mahnung',
+              next_due_date: v.next_due_date || null,
+              reason: v.reason || 'weitere Nachprüfung erforderlich'
+            });
+          });
+        });
+
+        var quickPlan = document.getElementById('caseQuickPlan');
+        if (quickPlan) quickPlan.addEventListener('click', function() {
+          var total = Number(ctx.amount || 0);
+          var count = total > 12000 ? 6 : 3;
+          var installment = count > 0 ? (total / count) : total;
+          openEditModal('Ratenplan aus Akte', [
+            { key: 'total_amount', label: 'Gesamtschuld', value: total.toFixed(2) },
+            { key: 'down_payment', label: 'Anzahlung', value: '0.00' },
+            { key: 'installment_count', label: 'Ratenanzahl', value: String(count) },
+            { key: 'installment_amount', label: 'Ratenhöhe', value: installment.toFixed(2) },
+            { key: 'start_date', label: 'Start (YYYY-MM-DD)', value: ctx.due_date || '' }
+          ], function(v) {
+            post('createInstallmentPlan', {
+              source_type: ctx.source_type,
+              source_id: ctx.source_id,
+              source_key: ctx.source_key,
+              subject_identifier: ctx.subject_identifier,
+              total_amount: Number(v.total_amount || 0),
+              down_payment: Number(v.down_payment || 0),
+              installment_count: Number(v.installment_count || 1),
+              installment_amount: Number(v.installment_amount || 0),
+              start_date: v.start_date || null,
+              next_due_date: v.start_date || null,
+              status: 'aktiv'
+            });
+          });
+        });
+
+        var quickHandoff = document.getElementById('caseQuickHandoff');
+        if (quickHandoff) quickHandoff.addEventListener('click', function() {
+          openEditModal('DOJ-Handoff aus Akte', [
+            { key: 'target_case_number', label: 'Zielakte (optional)', value: '' },
+            { key: 'risk_band', label: 'Risk Band', value: ctx.risk_band || 'mittelrisiko' },
+            { key: 'risk_score', label: 'Risk Score', value: String(ctx.risk_score || 0) },
+            { key: 'note', label: 'Grund', value: recommendation.reason }
+          ], function(v) {
+            post('createCaseHandoff', {
+              source_type: ctx.source_type,
+              source_id: ctx.source_id,
+              source_key: ctx.source_key,
+              target_case_number: v.target_case_number || null,
+              target_case_id: null,
+              risk_band: v.risk_band || 'mittelrisiko',
+              risk_score: Number(v.risk_score || 0),
+              note: v.note || recommendation.reason
+            });
+          });
+        });
+
+        var quickDoc = document.getElementById('caseQuickDocument');
+        if (quickDoc) quickDoc.addEventListener('click', function() {
+          openEditModal('Dokument aus Akte', [
+            { key: 'doc_type', label: 'Dokumenttyp', value: recommendation.action === 'mahnung' ? 'mahnung' : 'zahlungsaufforderung' },
+            { key: 'due_date', label: 'Frist (YYYY-MM-DD)', value: ctx.due_date || '' },
+            { key: 'subject', label: 'Betreff', value: 'Vorgang zu Akte ' + (ctx.source_key || ctx.source_id || '-') },
+            { key: 'body', label: 'Inhalt', value: 'Begründung: ' + recommendation.reason }
+          ], function(v) {
+            post('createDocument', {
+              doc_type: v.doc_type || 'zahlungsaufforderung',
+              source_type: ctx.source_type,
+              source_id: ctx.source_id,
+              source_key: ctx.source_key,
+              subject_identifier: ctx.subject_identifier,
+              subject_name: ctx.subject_name,
+              due_date: v.due_date || null,
+              subject: v.subject || 'Amtlicher Bescheid',
+              body: v.body || recommendation.reason,
+              status: 'entwurf',
+              meta_json: { amount: ctx.amount, recommendation: recommendation.action }
+            });
+          });
+        });
+
+        var quickDeadline = document.getElementById('caseQuickDeadline');
+        if (quickDeadline) quickDeadline.addEventListener('click', function() {
+          var options = '<select id="deadlineReasonSelect">' + reasonOptions('weitere Nachprüfung erforderlich') + '</select>';
+          openEditModal('Frist aus Akte setzen', [
+            { key: 'due_date', label: 'Fristdatum (YYYY-MM-DD)', value: ctx.due_date || '' }
+          ], function(v) {
+            var reason = ((document.getElementById('deadlineReasonSelect') || {}).value || 'weitere Nachprüfung erforderlich');
+            post('setDeadline', {
+              source_type: ctx.source_type,
+              source_id: ctx.source_id,
+              source_key: ctx.source_key,
+              due_date: v.due_date || null,
+              reason: reason
+            });
+          });
+          var modalSave = document.getElementById('modalSave');
+          if (modalSave) {
+            var wrapper = document.createElement('div');
+            wrapper.className = 'input-row';
+            wrapper.innerHTML = options;
+            modalSave.parentElement.insertBefore(wrapper, modalSave);
+          }
+        });
 
         post('getCaseTimeline', {
           source_type: detail.source_type,
@@ -206,7 +385,12 @@ function bindCaseDetailButtons() {
           source_key: detail.source_key || null
         }).then(function(tl) {
           var rows = (tl.rows || []).slice(0, 15).map(function(e) {
-            return (e.created_at || '-') + ' | ' + (e.kind || '-') + ' | ' + (e.title || '-');
+            var title = e.title || '-';
+            if (e.kind === 'audit' && title === 'enforcement_updated') title = 'Mahnstatus geändert';
+            if (e.kind === 'audit' && title === 'installment_created') title = 'Ratenplan angelegt';
+            if (e.kind === 'audit' && title === 'case_handoff_created') title = 'DOJ-Handoff erstellt';
+            if (e.kind === 'audit' && title === 'document_created') title = 'Dokument erzeugt';
+            return (e.created_at || '-') + ' | ' + title;
           }).join('<br/>');
           panel.innerHTML += '<div class="detail-panel small" style="margin-top:10px;">' + (rows || 'Keine Timeline-Einträge') + '</div>';
         });
@@ -466,19 +650,38 @@ function renderEnforcement() {
     var rows = (data.rows || []).map(function(r) {
       return '<tr><td>' + r.id + '</td><td>' + (r.source_type || '-') + '</td><td>' + (r.source_key || r.source_id || '-') + '</td><td>' + (r.status || '-') + '</td><td>' + (r.next_due_date || '-') + '</td><td>' + (r.reason || '-') + '</td><td><button data-edit-enf="' + r.id + '">Bearbeiten</button></td></tr>';
     }).join('');
-    content.innerHTML = '<div class="input-row"><input id="enfSourceType" placeholder="source_type" value="taxes_business" /><input id="enfSourceKey" placeholder="source_key" /><select id="enfStatus"><option value="offen">offen</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="vollstreckung_empfohlen">vollstreckung_empfohlen</option><option value="erledigt">erledigt</option><option value="ausgesetzt">ausgesetzt</option></select><input id="enfDue" placeholder="next_due_date YYYY-MM-DD" /><input id="enfReason" placeholder="Begründung" /><button id="saveEnforcement">Speichern</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>Status</th><th>Nächste Frist</th><th>Grund</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    content.innerHTML = '<div class="input-row"><input id="enfCaseSearch" placeholder="Bezugsfall suchen (ab 3 Zeichen)" /><select id="enfCaseSelect"><option value="">Fall wählen</option></select><select id="enfStatus"><option value="offen">offen</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="vollstreckung_empfohlen">vollstreckung_empfohlen</option><option value="erledigt">erledigt</option><option value="ausgesetzt">ausgesetzt</option></select><input id="enfDue" placeholder="next_due_date YYYY-MM-DD" /><select id="enfReason"><option value="">Grund wählen</option>' + reasonOptions('hohe offene Restschuld') + '</select><button id="saveEnforcement">Speichern</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>Status</th><th>Nächste Frist</th><th>Grund</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var caseMap = {};
+    var caseSearch = document.getElementById('enfCaseSearch');
+    var caseSelect = document.getElementById('enfCaseSelect');
+    if (caseSearch && caseSelect) {
+      caseSearch.addEventListener('input', debounce(function() {
+        var q = caseSearch.value || '';
+        if (q.length < 3) { caseSelect.innerHTML = '<option value="">Fall wählen</option>'; return; }
+        post('searchCases', { query: q }).then(function(res) {
+          caseMap = {};
+          var options = ['<option value="">Fall wählen</option>'];
+          (res.rows || []).forEach(function(r) {
+            caseMap[r.value] = r;
+            options.push('<option value="' + r.value + '">' + r.label + '</option>');
+          });
+          caseSelect.innerHTML = options.join('');
+        });
+      }, 240));
+    }
     var btn = document.getElementById('saveEnforcement');
     if (btn) {
       btn.addEventListener('click', function() {
+        var selected = caseMap[(document.getElementById('enfCaseSelect') || {}).value || ''] || {};
         post('upsertEnforcement', {
-          source_type: (document.getElementById('enfSourceType') || {}).value || '',
-          source_id: null,
-          source_key: (document.getElementById('enfSourceKey') || {}).value || '',
+          source_type: selected.source_type || '',
+          source_id: selected.source_id || null,
+          source_key: selected.source_key || null,
           subject_type: 'case',
-          subject_identifier: (document.getElementById('enfSourceKey') || {}).value || '',
+          subject_identifier: selected.value || '',
           status: (document.getElementById('enfStatus') || {}).value || 'offen',
           next_due_date: (document.getElementById('enfDue') || {}).value || null,
-          reason: (document.getElementById('enfReason') || {}).value || ''
+          reason: (document.getElementById('enfReason') || {}).value || 'weitere Nachprüfung erforderlich'
         }).then(function() { renderEnforcement(); });
       });
     }
@@ -514,14 +717,44 @@ function renderInstallments() {
     var rows = (data.rows || []).map(function(r) {
       return '<tr><td>' + r.id + '</td><td>' + (r.source_type || '-') + '</td><td>' + (r.source_key || '-') + '</td><td>' + money(r.total_amount) + '</td><td>' + safe(r.installment_count, 0) + '</td><td>' + money(r.installment_amount) + '</td><td>' + (r.status || '-') + '</td><td>' + (r.next_due_date || '-') + '</td></tr>';
     }).join('');
-    content.innerHTML = '<div class="input-row"><input id="plSourceType" placeholder="source_type" value="taxes_business" /><input id="plSourceKey" placeholder="source_key" /><input id="plTotal" placeholder="Gesamtschuld" /><input id="plDown" placeholder="Anzahlung" /><input id="plCount" placeholder="Ratenanzahl" /><input id="plAmount" placeholder="Ratenhöhe" /><input id="plStart" placeholder="Start YYYY-MM-DD" /><button id="savePlan">Plan erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>Gesamt</th><th>Raten</th><th>Rate</th><th>Status</th><th>Nächste Fälligkeit</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    content.innerHTML = '<div class="input-row"><input id="plCaseSearch" placeholder="Bezugsfall suchen (ab 3 Zeichen)" /><select id="plCaseSelect"><option value="">Fall wählen</option></select><input id="plTotal" placeholder="Gesamtschuld" /><input id="plDown" placeholder="Anzahlung" /><input id="plCount" placeholder="Ratenanzahl" /><input id="plAmount" placeholder="Ratenhöhe" /><input id="plStart" placeholder="Start YYYY-MM-DD" /><button id="savePlan">Plan erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>Gesamt</th><th>Raten</th><th>Rate</th><th>Status</th><th>Nächste Fälligkeit</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var caseMap = {};
+    var caseSearch = document.getElementById('plCaseSearch');
+    var caseSelect = document.getElementById('plCaseSelect');
+    if (caseSearch && caseSelect) {
+      caseSearch.addEventListener('input', debounce(function() {
+        var q = caseSearch.value || '';
+        if (q.length < 3) { caseSelect.innerHTML = '<option value="">Fall wählen</option>'; return; }
+        post('searchCases', { query: q }).then(function(res) {
+          caseMap = {};
+          var options = ['<option value="">Fall wählen</option>'];
+          (res.rows || []).forEach(function(r) {
+            caseMap[r.value] = r;
+            options.push('<option value="' + r.value + '">' + r.label + '</option>');
+          });
+          caseSelect.innerHTML = options.join('');
+        });
+      }, 240));
+      caseSelect.addEventListener('change', function() {
+        var selected = caseMap[caseSelect.value || ''];
+        if (!selected) return;
+        var total = Number(selected.amount || 0);
+        var count = total > 12000 ? 6 : 3;
+        var amount = count > 0 ? total / count : total;
+        (document.getElementById('plTotal') || {}).value = total.toFixed(2);
+        (document.getElementById('plCount') || {}).value = String(count);
+        (document.getElementById('plAmount') || {}).value = amount.toFixed(2);
+      });
+    }
     var btn = document.getElementById('savePlan');
     if (btn) {
       btn.addEventListener('click', function() {
+        var selected = caseMap[(document.getElementById('plCaseSelect') || {}).value || ''] || {};
         post('createInstallmentPlan', {
-          source_type: (document.getElementById('plSourceType') || {}).value || '',
-          source_id: null,
-          source_key: (document.getElementById('plSourceKey') || {}).value || '',
+          source_type: selected.source_type || '',
+          source_id: selected.source_id || null,
+          source_key: selected.source_key || null,
+          subject_identifier: selected.value || '',
           total_amount: Number((document.getElementById('plTotal') || {}).value || 0),
           down_payment: Number((document.getElementById('plDown') || {}).value || 0),
           installment_count: Number((document.getElementById('plCount') || {}).value || 1),
@@ -540,45 +773,85 @@ function renderHandoffs() {
     var rows = (data.rows || []).map(function(r) {
       return '<tr><td>' + r.id + '</td><td>' + (r.source_type || '-') + '</td><td>' + (r.source_key || '-') + '</td><td>' + (r.target_case_number || r.target_case_id || '-') + '</td><td>' + (r.risk_band || '-') + '</td><td>' + safe(r.risk_score, 0) + '</td><td>' + (r.status || '-') + '</td></tr>';
     }).join('');
-    content.innerHTML = '<div class="input-row"><input id="hoSourceType" placeholder="source_type" value="taxes_business" /><input id="hoSourceKey" placeholder="source_key" /><input id="hoCaseId" placeholder="target_case_id" /><input id="hoCaseNo" placeholder="target_case_number" /><input id="hoRiskBand" placeholder="risk_band" /><input id="hoRiskScore" placeholder="risk_score" /><input id="hoNote" placeholder="Bearbeiternotiz" /><button id="saveHandoff">Handoff erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>DOJ Case</th><th>Band</th><th>Score</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    content.innerHTML = '<div class="input-row"><input id="hoCaseSearch" placeholder="Bezugsfall suchen (ab 3 Zeichen)" /><select id="hoCaseSelect"><option value="">Fall wählen</option></select><input id="hoCaseNo" placeholder="DOJ-Akte (optional)" /><select id="hoRiskBand"><option value="unauffaellig">unauffaellig</option><option value="mittelrisiko">mittelrisiko</option><option value="hochrisiko">hochrisiko</option></select><input id="hoRiskScore" placeholder="risk_score" /><select id="hoNote"><option value="">Grund wählen</option>' + reasonOptions('weitere Nachprüfung erforderlich') + '</select><button id="saveHandoff">Handoff erstellen</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Quelle</th><th>Fall</th><th>DOJ Case</th><th>Band</th><th>Score</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var caseMap = {};
+    var caseSearch = document.getElementById('hoCaseSearch');
+    var caseSelect = document.getElementById('hoCaseSelect');
+    if (caseSearch && caseSelect) {
+      caseSearch.addEventListener('input', debounce(function() {
+        var q = caseSearch.value || '';
+        if (q.length < 3) { caseSelect.innerHTML = '<option value="">Fall wählen</option>'; return; }
+        post('searchCases', { query: q }).then(function(res) {
+          caseMap = {};
+          var options = ['<option value="">Fall wählen</option>'];
+          (res.rows || []).forEach(function(r) {
+            caseMap[r.value] = r;
+            options.push('<option value="' + r.value + '">' + r.label + '</option>');
+          });
+          caseSelect.innerHTML = options.join('');
+        });
+      }, 240));
+    }
     var btn = document.getElementById('saveHandoff');
     if (btn) btn.addEventListener('click', function() {
+      var selected = caseMap[(document.getElementById('hoCaseSelect') || {}).value || ''] || {};
       post('createCaseHandoff', {
-        source_type: (document.getElementById('hoSourceType') || {}).value || '',
-        source_id: null,
-        source_key: (document.getElementById('hoSourceKey') || {}).value || '',
-        target_case_id: Number((document.getElementById('hoCaseId') || {}).value || 0) || null,
+        source_type: selected.source_type || '',
+        source_id: selected.source_id || null,
+        source_key: selected.source_key || null,
+        target_case_id: null,
         target_case_number: (document.getElementById('hoCaseNo') || {}).value || null,
         risk_band: (document.getElementById('hoRiskBand') || {}).value || null,
         risk_score: Number((document.getElementById('hoRiskScore') || {}).value || 0) || null,
-        note: (document.getElementById('hoNote') || {}).value || ''
+        note: (document.getElementById('hoNote') || {}).value || 'weitere Nachprüfung erforderlich'
       }).then(function() { renderHandoffs(); });
     });
   });
 }
 
 function renderNetwork() {
-  content.innerHTML = '<div class="input-row"><input id="nwBusinessId" placeholder="business_id" /><button id="loadNetwork">Netzwerk laden</button></div><div id="networkPanel" class="detail-panel small">Business-ID eingeben.</div>';
+  content.innerHTML = '<div class="input-row"><select id="nwMode"><option value="business">Firma</option><option value="person">Person</option><option value="iban">IBAN</option><option value="plate">Kennzeichen</option><option value="identifier">Identifier</option></select><input id="nwSearch" placeholder="Sucheingabe (ab 3 Zeichen)" /><button id="loadNetwork">Suchen</button></div><div id="networkResults" class="table-wrap"></div><div id="networkPanel" class="detail-panel small">Suchmodus wählen und suchen.</div>';
   var btn = document.getElementById('loadNetwork');
   if (btn) btn.addEventListener('click', function() {
-    var businessId = (document.getElementById('nwBusinessId') || {}).value || '';
-    if (!businessId) return;
-    post('getNetworkProfile', { business_id: businessId }).then(function(data) {
-      var panel = document.getElementById('networkPanel');
-      if (!panel) return;
-      if (!data || !data.business) {
-        panel.textContent = 'Kein Netzwerkprofil gefunden.';
-        return;
+    var mode = (document.getElementById('nwMode') || {}).value || 'business';
+    var query = (document.getElementById('nwSearch') || {}).value || '';
+    if (query.length < 3) return;
+    post('searchRegister', { mode: mode, query: query }).then(function(result) {
+      var rows = result.rows || [];
+      var html = rows.map(function(r) {
+        return '<tr><td>' + (r.value || '-') + '</td><td>' + (r.label || '-') + '</td><td><button data-nw-open="' + (r.value || '') + '">öffnen</button></td></tr>';
+      }).join('');
+      var resultPanel = document.getElementById('networkResults');
+      if (resultPanel) {
+        resultPanel.innerHTML = '<table><thead><tr><th>Treffer</th><th>Erklärung</th><th>Aktion</th></tr></thead><tbody>' + html + '</tbody></table>';
       }
-      var lines = [];
-      lines.push('Business: ' + (data.business.id || '-'));
-      lines.push('Owners: ' + (data.owners || []).join(', '));
-      lines.push('Employees: ' + (data.employees || []).slice(0, 20).join(', '));
-      lines.push('Users: ' + safe((data.users || []).length, 0));
-      lines.push('Vehicles: ' + safe((data.vehicles || []).length, 0));
-      lines.push('DOJ Cases: ' + safe((data.doj_cases || []).length, 0));
-      lines.push('Societies: ' + safe((data.societies || []).length, 0));
-      panel.textContent = lines.join('\n');
+      Array.prototype.slice.call(document.querySelectorAll('[data-nw-open]')).forEach(function(openBtn) {
+        openBtn.addEventListener('click', function() {
+          var businessId = openBtn.getAttribute('data-nw-open') || '';
+          if (!businessId || mode !== 'business') {
+            var panel = document.getElementById('networkPanel');
+            if (panel) panel.textContent = 'Detailansicht ist aktuell für Firmenmodus verfügbar.';
+            return;
+          }
+          post('getNetworkProfile', { business_id: businessId }).then(function(data) {
+            var panel = document.getElementById('networkPanel');
+            if (!panel) return;
+            if (!data || !data.business) {
+              panel.textContent = 'Kein Netzwerkprofil gefunden.';
+              return;
+            }
+            var lines = [];
+            lines.push('Business: ' + (data.business.id || '-'));
+            lines.push('Owners: ' + (data.owners || []).join(', '));
+            lines.push('Employees: ' + (data.employees || []).slice(0, 20).join(', '));
+            lines.push('Users: ' + safe((data.users || []).length, 0));
+            lines.push('Vehicles: ' + safe((data.vehicles || []).length, 0));
+            lines.push('DOJ Cases: ' + safe((data.doj_cases || []).length, 0));
+            lines.push('Societies: ' + safe((data.societies || []).length, 0));
+            panel.textContent = lines.join('\n');
+          });
+        });
+      });
     });
   });
 }
@@ -588,19 +861,58 @@ function renderDocuments() {
     var rows = (data.rows || []).map(function(d) {
       return '<tr><td>' + d.doc_no + '</td><td>' + d.doc_type + '</td><td>' + (d.subject_name || d.subject_identifier || '-') + '</td><td>' + d.subject + '</td><td>' + (d.status || '-') + '</td><td>' + (d.due_date || '-') + '</td><td><button data-edit-doc="' + d.id + '">Bearbeiten</button></td></tr>';
     }).join('');
-    content.innerHTML = '<div class="input-row"><select id="docType"><option value="zahlungsaufforderung">zahlungsaufforderung</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="ratenzahlungsvereinbarung">ratenzahlungsvereinbarung</option><option value="pruefankuendigung">pruefankuendigung</option><option value="uebergabevermerk_doj">uebergabevermerk_doj</option><option value="abschlussvermerk">abschlussvermerk</option></select><input id="docSourceType" placeholder="source_type" /><input id="docSourceKey" placeholder="source_key" /><input id="docSubjectName" placeholder="Betroffene Person/Firma" /><input id="docSubject" placeholder="Betreff" /><input id="docDue" placeholder="Frist YYYY-MM-DD" /><input id="docBody" placeholder="Inhalt" /><button id="createDoc">Dokument erstellen</button></div><div class="table-wrap"><table><thead><tr><th>Doc-No</th><th>Typ</th><th>Betroffen</th><th>Betreff</th><th>Status</th><th>Frist</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    content.innerHTML = '<div class="input-row"><select id="docType"><option value="zahlungsaufforderung">zahlungsaufforderung</option><option value="erinnerung">erinnerung</option><option value="mahnung">mahnung</option><option value="letzte_frist">letzte_frist</option><option value="ratenzahlungsvereinbarung">ratenzahlungsvereinbarung</option><option value="pruefankuendigung">pruefankuendigung</option><option value="uebergabevermerk_doj">uebergabevermerk_doj</option><option value="abschlussvermerk">abschlussvermerk</option></select><input id="docCaseSearch" placeholder="Bezugsfall suchen (ab 3 Zeichen)" /><select id="docCaseSelect"><option value=\"\">Fall wählen</option></select><input id="docSubjectName" placeholder="Betroffene Person/Firma" /><input id="docSubject" placeholder="Betreff" /><input id="docDue" placeholder="Frist YYYY-MM-DD" /><input id="docBody" placeholder="Inhalt" /><select id="docStatus"><option value="entwurf">Entwurf</option><option value="erstellt">erstellt</option><option value="archiviert">archiviert</option></select><button id="previewDoc">Vorschau</button><button id="createDoc">Dokument erstellen</button></div><div id="docPreview" class="detail-panel small">Vorschau wird hier angezeigt.</div><div class="table-wrap"><table><thead><tr><th>Doc-No</th><th>Typ</th><th>Betroffen</th><th>Betreff</th><th>Status</th><th>Frist</th><th>Aktion</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var caseMap = {};
+    var caseSearch = document.getElementById('docCaseSearch');
+    var caseSelect = document.getElementById('docCaseSelect');
+    if (caseSearch && caseSelect) {
+      caseSearch.addEventListener('input', debounce(function() {
+        var q = caseSearch.value || '';
+        if (q.length < 3) { caseSelect.innerHTML = '<option value="">Fall wählen</option>'; return; }
+        post('searchCases', { query: q }).then(function(res) {
+          caseMap = {};
+          var options = ['<option value="">Fall wählen</option>'];
+          (res.rows || []).forEach(function(r) {
+            caseMap[r.value] = r;
+            options.push('<option value="' + r.value + '">' + r.label + '</option>');
+          });
+          caseSelect.innerHTML = options.join('');
+        });
+      }, 240));
+      caseSelect.addEventListener('change', function() {
+        var selected = caseMap[caseSelect.value || ''];
+        if (!selected) return;
+        if (selected.label) (document.getElementById('docSubject') || {}).value = 'Vorgang: ' + selected.label;
+      });
+    }
+    var previewBtn = document.getElementById('previewDoc');
+    if (previewBtn) previewBtn.addEventListener('click', function() {
+      var selected = caseMap[(document.getElementById('docCaseSelect') || {}).value || ''] || {};
+      var preview = document.getElementById('docPreview');
+      if (!preview) return;
+      preview.textContent = [
+        'Typ: ' + ((document.getElementById('docType') || {}).value || '-'),
+        'Bezugsfall: ' + (selected.label || '-'),
+        'Partei: ' + ((document.getElementById('docSubjectName') || {}).value || '-'),
+        'Frist: ' + ((document.getElementById('docDue') || {}).value || '-'),
+        'Betreff: ' + ((document.getElementById('docSubject') || {}).value || '-'),
+        'Text: ' + ((document.getElementById('docBody') || {}).value || '-')
+      ].join('\n');
+    });
     var btn = document.getElementById('createDoc');
     if (btn) btn.addEventListener('click', function() {
+      var selected = caseMap[(document.getElementById('docCaseSelect') || {}).value || ''] || {};
       post('createDocument', {
         doc_type: (document.getElementById('docType') || {}).value || 'zahlungsaufforderung',
-        source_type: (document.getElementById('docSourceType') || {}).value || '',
-        source_id: null,
-        source_key: (document.getElementById('docSourceKey') || {}).value || '',
+        source_type: selected.source_type || '',
+        source_id: selected.source_id || null,
+        source_key: selected.source_key || null,
         subject_name: (document.getElementById('docSubjectName') || {}).value || '',
+        subject_identifier: selected.value || '',
         subject: (document.getElementById('docSubject') || {}).value || 'Finanzbescheid',
         due_date: (document.getElementById('docDue') || {}).value || null,
         body: (document.getElementById('docBody') || {}).value || 'Amtlicher Bescheid',
-        status: 'erstellt'
+        status: (document.getElementById('docStatus') || {}).value || 'entwurf'
       }).then(function() { renderDocuments(); });
     });
     Array.prototype.slice.call(document.querySelectorAll('[data-edit-doc]')).forEach(function(el) {

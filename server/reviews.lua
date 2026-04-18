@@ -143,7 +143,18 @@ function FinanceReviews.addLink(source, payload)
         tax_source_key = refKey,
         match_quality = payload.match_quality,
         comment = payload.comment,
-        created_by = playerIdentifier(source)
+        created_by = playerIdentifier(source),
+        link_type = payload.link_type,
+        source_table = payload.source_table,
+        source_ref = payload.source_ref,
+        target_type = payload.target_type,
+        target_ref = payload.target_ref,
+        confidence_score = payload.confidence_score,
+        confidence_band = payload.confidence_band,
+        reason_codes = payload.reason_codes,
+        reason_text = payload.reason_text,
+        detection_mode = payload.detection_mode,
+        review_status = payload.review_status
     })
 
     FinanceReviews.addAudit(payload.tax_source_type, refId, refKey, 'link_added', playerIdentifier(source), {
@@ -152,6 +163,18 @@ function FinanceReviews.addLink(source, payload)
     })
 
     return id
+end
+
+function FinanceReviews.reviewLink(source, payload)
+    local ok = FinanceDB.setLinkReviewStatus(payload.link_id, payload.review_status, payload.reason_code, payload.note, playerIdentifier(source))
+    if not ok then return false end
+    local refId, refKey = normalizeSourceRef(payload.source_type, payload.source_id, payload.source_key)
+    FinanceReviews.addAudit(payload.source_type, refId, refKey, 'link_reviewed', playerIdentifier(source), {
+        link_id = payload.link_id,
+        review_status = payload.review_status,
+        reason_code = payload.reason_code
+    })
+    return true
 end
 
 function FinanceReviews.removeLink(source, payload)

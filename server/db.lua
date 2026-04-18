@@ -662,6 +662,72 @@ function FinanceDB.searchLookup(kind, q)
         return MySQL.query.await('SELECT identifier AS value, CONCAT(firstname, " ", lastname) AS label FROM users WHERE lower(identifier) LIKE ? OR lower(firstname) LIKE ? OR lower(lastname) LIKE ? LIMIT 20', { w, w, w }) or {}
     elseif kind == 'doj_case' and FinanceDB.tableExists('doj_cases') then
         return MySQL.query.await('SELECT CAST(id AS CHAR) AS value, case_number AS label FROM doj_cases WHERE lower(case_number) LIKE ? ORDER BY id DESC LIMIT 20', { w }) or {}
+    elseif kind == 'case' then
+        return FinanceDB.searchCases(q)
+    end
+    return {}
+end
+
+function FinanceDB.searchCases(query)
+    local term = tostring(query or ''):lower()
+    if #term < 3 then return {} end
+    local w = ('%%%s%%'):format(term)
+    local out = {}
+    local privateRows = MySQL.query.await([[
+        SELECT id, receiver_name, receiver, amount, received_date
+        FROM taxes
+        WHERE CAST(id AS CHAR) LIKE ? OR lower(receiver_name) LIKE ? OR lower(receiver) LIKE ?
+        ORDER BY id DESC
+        LIMIT 10
+    ]], { w, w, w }) or {}
+    for _, row in ipairs(privateRows) do
+        out[#out + 1] = {
+            source_type = 'taxes',
+            source_id = row.id,
+            source_key = nil,
+            value = ('taxes:%s'):format(row.id),
+            label = ('Privatsteuer #%s - %s (%s)'):format(row.id, row.receiver_name or row.receiver or '-', row.received_date or '-'),
+            amount = FinanceUtils.safeNumber(row.amount)
+        }
+    end
+
+    local businessRows = MySQL.query.await([[
+        SELECT job, period, job_label, amount, paid_amount, delayed_amount
+        FROM taxes_business
+        WHERE lower(job) LIKE ? OR lower(job_label) LIKE ? OR lower(period) LIKE ?
+        ORDER BY period DESC
+        LIMIT 14
+    ]], { w, w, w }) or {}
+    for _, row in ipairs(businessRows) do
+        local sourceKey = FinanceUtils.businessKey(row.job, row.period)
+        out[#out + 1] = {
+            source_type = 'taxes_business',
+            source_id = nil,
+            source_key = sourceKey,
+            value = ('taxes_business:%s'):format(sourceKey),
+            label = ('Businesssteuer %s/%s - %s'):format(row.job or '-', row.period or '-', row.job_label or row.job or '-'),
+            amount = math.max(0, FinanceUtils.safeNumber(row.amount) - FinanceUtils.safeNumber(row.paid_amount) + FinanceUtils.safeNumber(row.delayed_amount))
+        }
+    end
+
+    return out
+end
+
+function FinanceDB.searchRegister(mode, query)
+    local term = tostring(query or ''):lower()
+    if #term < 3 then return {} end
+    local w = ('%%%s%%'):format(term)
+    mode = tostring(mode or 'business')
+    if mode == 'business' then
+        return MySQL.query.await('SELECT id AS value, CONCAT(type, " | Owner: ", owner) AS label, "business" AS entry_type FROM vms_business WHERE lower(id) LIKE ? OR lower(type) LIKE ? OR lower(owner) LIKE ? LIMIT 30', { w, w, w }) or {}
+    elseif mode == 'person' and FinanceDB.tableExists('users') then
+        return MySQL.query.await('SELECT identifier AS value, CONCAT(firstname, " ", lastname) AS label, "person" AS entry_type FROM users WHERE lower(identifier) LIKE ? OR lower(firstname) LIKE ? OR lower(lastname) LIKE ? LIMIT 30', { w, w, w }) or {}
+    elseif mode == 'identifier' and FinanceDB.tableExists('users') then
+        return MySQL.query.await('SELECT identifier AS value, CONCAT(firstname, " ", lastname) AS label, "identifier" AS entry_type FROM users WHERE lower(identifier) LIKE ? LIMIT 30', { w }) or {}
+    elseif mode == 'iban' and FinanceDB.tableExists('okokbanking_societies') then
+        return MySQL.query.await('SELECT iban AS value, CONCAT(society_name, " (", society, ")") AS label, "iban" AS entry_type FROM okokbanking_societies WHERE lower(iban) LIKE ? OR lower(society_name) LIKE ? OR lower(society) LIKE ? LIMIT 30', { w, w, w }) or {}
+    elseif mode == 'plate' and FinanceDB.tableExists('owned_vehicles') then
+        return MySQL.query.await('SELECT plate AS value, owner AS label, "plate" AS entry_type FROM owned_vehicles WHERE lower(plate) LIKE ? OR lower(owner) LIKE ? LIMIT 30', { w, w }) or {}
     end
     return {}
 end
@@ -948,22 +1014,32 @@ function FinanceDB.deleteDeadline(sourceType, sourceId, sourceKey)
 end
 
 function FinanceDB.fetchLinks(sourceType, sourceId, sourceKey)
+    local cols = FinanceDB.fetchTableColumns('doj_finance_links')
+    local reasonCodesExpr = cols.reason_codes and 'l.reason_codes' or 'NULL AS reason_codes'
+    local reasonTextExpr = cols.reason_text and 'l.reason_text' or 'NULL AS reason_text'
+    local detectionModeExpr = cols.detection_mode and 'l.detection_mode' or "'automatic' AS detection_mode"
+    local reviewStatusExpr = cols.review_status and 'l.review_status' or "'vorgeschlagen' AS review_status"
+    local reviewedByExpr = cols.reviewed_by and 'l.reviewed_by' or 'NULL AS reviewed_by'
+    local reviewedAtExpr = cols.reviewed_at and 'l.reviewed_at' or 'NULL AS reviewed_at'
+    local linkTypeExpr = cols.link_type and 'l.link_type' or "'verdachtsverbindung' AS link_type"
+    local confidenceScoreExpr = cols.confidence_score and 'l.confidence_score' or '0 AS confidence_score'
+    local confidenceBandExpr = cols.confidence_band and 'l.confidence_band' or "'niedrig' AS confidence_band"
     return MySQL.query.await([[
         SELECT l.id, l.business_job, l.period, l.transaction_id, l.tax_source_type, l.tax_source_id, l.tax_source_key,
                l.match_quality, l.comment, l.created_by, l.created_at,
+               %s, %s, %s, %s, %s, %s, %s, %s, %s,
                t.value, t.date, t.type, t.sender_name, t.receiver_name
         FROM doj_finance_links l
         LEFT JOIN okokbanking_transactions t ON t.id = l.transaction_id
         WHERE l.tax_source_type = ? AND l.tax_source_id <=> ? AND l.tax_source_key <=> ?
         ORDER BY l.id DESC
-    ]], { sourceType, sourceId, sourceKey }) or {}
+    ]]):format(linkTypeExpr, confidenceScoreExpr, confidenceBandExpr, reasonCodesExpr, reasonTextExpr, detectionModeExpr, reviewStatusExpr, reviewedByExpr, reviewedAtExpr), { sourceType, sourceId, sourceKey }) or {}
 end
 
 function FinanceDB.createLink(payload)
-    local id = MySQL.insert.await([[
-        INSERT INTO doj_finance_links (business_job, period, transaction_id, tax_source_type, tax_source_id, tax_source_key, match_quality, comment, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ]], {
+    local cols = FinanceDB.fetchTableColumns('doj_finance_links')
+    local fields = { 'business_job', 'period', 'transaction_id', 'tax_source_type', 'tax_source_id', 'tax_source_key', 'match_quality', 'comment', 'created_by' }
+    local values = {
         payload.business_job,
         payload.period,
         payload.transaction_id,
@@ -973,9 +1049,57 @@ function FinanceDB.createLink(payload)
         payload.match_quality,
         payload.comment,
         payload.created_by
-    })
+    }
+    local function addOptional(field, value)
+        if cols[field] then
+            fields[#fields + 1] = field
+            values[#values + 1] = value
+        end
+    end
+    addOptional('link_type', payload.link_type or 'verdachtsverbindung')
+    addOptional('source_table', payload.source_table)
+    addOptional('source_ref', payload.source_ref)
+    addOptional('target_type', payload.target_type or 'business')
+    addOptional('target_ref', payload.target_ref)
+    addOptional('confidence_score', payload.confidence_score or 0)
+    addOptional('confidence_band', payload.confidence_band or 'niedrig')
+    addOptional('reason_codes', json.encode(payload.reason_codes or {}))
+    addOptional('reason_text', payload.reason_text)
+    addOptional('detection_mode', payload.detection_mode or 'automatic')
+    addOptional('review_status', payload.review_status or 'vorgeschlagen')
+    local marks = {}
+    for i = 1, #fields do
+        marks[i] = '?'
+    end
+    local id = MySQL.insert.await(('INSERT INTO doj_finance_links (%s) VALUES (%s)'):format(table.concat(fields, ', '), table.concat(marks, ', ')), values)
 
     return id
+end
+
+function FinanceDB.setLinkReviewStatus(linkId, status, reasonCode, note, actor)
+    if not FinanceDB.tableExists('doj_finance_links') then return false end
+    local cols = FinanceDB.fetchTableColumns('doj_finance_links')
+    if not cols.review_status then return false end
+    local prev = MySQL.single.await('SELECT review_status FROM doj_finance_links WHERE id = ?', { linkId })
+    if not prev then return false end
+    local updateSql = 'UPDATE doj_finance_links SET review_status = ?'
+    local params = { status }
+    if cols.reviewed_by then
+        updateSql = updateSql .. ', reviewed_by = ?'
+        params[#params + 1] = actor
+    end
+    if cols.reviewed_at then
+        updateSql = updateSql .. ', reviewed_at = CURRENT_TIMESTAMP'
+    end
+    updateSql = updateSql .. ' WHERE id = ?'
+    params[#params + 1] = linkId
+    MySQL.update.await(updateSql, params)
+    if FinanceDB.tableExists('doj_finance_link_reviews') then
+        MySQL.insert.await('INSERT INTO doj_finance_link_reviews (link_id, from_status, to_status, reason_code, note, changed_by) VALUES (?, ?, ?, ?, ?, ?)', {
+            linkId, prev.review_status, status, reasonCode, note, actor
+        })
+    end
+    return true
 end
 
 function FinanceDB.deleteLink(linkId)

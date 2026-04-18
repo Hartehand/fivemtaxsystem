@@ -276,6 +276,11 @@ lib.callback.register('doj_finance_suite:server:removeLink', function(source, pa
     return FinanceReviews.removeLink(source, payload)
 end)
 
+lib.callback.register('doj_finance_suite:server:reviewLink', function(source, payload)
+    assertAccess(source)
+    return FinanceReviews.reviewLink(source, payload)
+end)
+
 lib.callback.register('doj_finance_suite:server:upsertBusinessMap', function(source, payload)
     assertAccess(source)
     FinanceDB.upsertBusinessMap(payload.tax_job, payload.business_id, payload.alias, getPlayer(source).getIdentifier())
@@ -487,6 +492,16 @@ end)
 lib.callback.register('doj_finance_suite:server:listCitizens', function(source, filters)
     assertAccess(source)
     return FinanceDB.fetchCitizenOverview(filters)
+end)
+
+lib.callback.register('doj_finance_suite:server:searchCases', function(source, query)
+    assertAccess(source)
+    return FinanceDB.searchCases(query)
+end)
+
+lib.callback.register('doj_finance_suite:server:searchRegister', function(source, mode, query)
+    assertAccess(source)
+    return FinanceDB.searchRegister(mode, query)
 end)
 
 lib.callback.register('doj_finance_suite:server:getNetworkProfile', function(source, businessId)

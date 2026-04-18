@@ -115,6 +115,37 @@ CREATE TABLE IF NOT EXISTS `doj_finance_links` (
   KEY `idx_tax_source` (`tax_source_type`, `tax_source_id`, `tax_source_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+ALTER TABLE `doj_finance_links`
+  ADD COLUMN IF NOT EXISTS `link_type` VARCHAR(40) NOT NULL DEFAULT 'verdachtsverbindung' AFTER `tax_source_key`,
+  ADD COLUMN IF NOT EXISTS `source_table` VARCHAR(64) NULL AFTER `link_type`,
+  ADD COLUMN IF NOT EXISTS `source_ref` VARCHAR(191) NULL AFTER `source_table`,
+  ADD COLUMN IF NOT EXISTS `target_type` VARCHAR(40) NOT NULL DEFAULT 'business' AFTER `source_ref`,
+  ADD COLUMN IF NOT EXISTS `target_ref` VARCHAR(191) NULL AFTER `target_type`,
+  ADD COLUMN IF NOT EXISTS `confidence_score` DECIMAL(5,2) NOT NULL DEFAULT 0 AFTER `target_ref`,
+  ADD COLUMN IF NOT EXISTS `confidence_band` VARCHAR(24) NOT NULL DEFAULT 'niedrig' AFTER `confidence_score`,
+  ADD COLUMN IF NOT EXISTS `reason_codes` LONGTEXT NULL AFTER `confidence_band`,
+  ADD COLUMN IF NOT EXISTS `reason_text` VARCHAR(255) NULL AFTER `reason_codes`,
+  ADD COLUMN IF NOT EXISTS `detection_mode` ENUM('automatic','manual') NOT NULL DEFAULT 'automatic' AFTER `reason_text`,
+  ADD COLUMN IF NOT EXISTS `review_status` ENUM('vorgeschlagen','geprueft','bestaetigt','verworfen') NOT NULL DEFAULT 'vorgeschlagen' AFTER `detection_mode`,
+  ADD COLUMN IF NOT EXISTS `reviewed_by` VARCHAR(100) NULL AFTER `review_status`,
+  ADD COLUMN IF NOT EXISTS `reviewed_at` TIMESTAMP NULL AFTER `reviewed_by`;
+
+CREATE TABLE IF NOT EXISTS `doj_finance_link_reviews` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `link_id` BIGINT UNSIGNED NOT NULL,
+  `from_status` VARCHAR(24) NULL,
+  `to_status` VARCHAR(24) NOT NULL,
+  `reason_code` VARCHAR(64) NULL,
+  `note` VARCHAR(255) NULL,
+  `changed_by` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_link_status` (`link_id`, `to_status`),
+  CONSTRAINT `fk_finance_link_review_link`
+    FOREIGN KEY (`link_id`) REFERENCES `doj_finance_links` (`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS `doj_finance_business_map` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `tax_job` VARCHAR(64) NOT NULL,
