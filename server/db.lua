@@ -1024,7 +1024,7 @@ function FinanceDB.fetchLinks(sourceType, sourceId, sourceKey)
     local linkTypeExpr = cols.link_type and 'l.link_type' or "'verdachtsverbindung' AS link_type"
     local confidenceScoreExpr = cols.confidence_score and 'l.confidence_score' or '0 AS confidence_score'
     local confidenceBandExpr = cols.confidence_band and 'l.confidence_band' or "'niedrig' AS confidence_band"
-    return MySQL.query.await([[
+    return MySQL.query.await(([[
         SELECT l.id, l.business_job, l.period, l.transaction_id, l.tax_source_type, l.tax_source_id, l.tax_source_key,
                l.match_quality, l.comment, l.created_by, l.created_at,
                %s, %s, %s, %s, %s, %s, %s, %s, %s,
@@ -1033,7 +1033,11 @@ function FinanceDB.fetchLinks(sourceType, sourceId, sourceKey)
         LEFT JOIN okokbanking_transactions t ON t.id = l.transaction_id
         WHERE l.tax_source_type = ? AND l.tax_source_id <=> ? AND l.tax_source_key <=> ?
         ORDER BY l.id DESC
-    ]]):format(linkTypeExpr, confidenceScoreExpr, confidenceBandExpr, reasonCodesExpr, reasonTextExpr, detectionModeExpr, reviewStatusExpr, reviewedByExpr, reviewedAtExpr), { sourceType, sourceId, sourceKey }) or {}
+    ]]):format(linkTypeExpr, confidenceScoreExpr, confidenceBandExpr, reasonCodesExpr, reasonTextExpr, detectionModeExpr, reviewStatusExpr, reviewedByExpr, reviewedAtExpr), {
+        sourceType,
+        sourceId,
+        sourceKey
+    }) or {}
 end
 
 function FinanceDB.listMappingLinks(filters)
